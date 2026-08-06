@@ -51,8 +51,9 @@
                                                                                                    \
     XdpCredentialResponsePromise *response_promise = (XdpCredentialResponsePromise *) user_data;   \
     XdpCredential *credential = response_promise->credential;                                      \
+    DexChannel *channel = credential->credsd_signal_monitor->snake_name##_channel;                 \
                                                                                                    \
-    while (dex_channel_can_receive(credential->credsd_signal_monitor->snake_name##_channel))       \
+    while (channel != NULL && dex_channel_can_receive(channel))                                    \
       {                                                                                            \
         g_autoptr (CredentialsdDbusExperimentalSession##signal_name##Signal) signal = NULL;        \
         signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_##snake_name ( \
@@ -150,6 +151,8 @@ static void xdp_credential_dispose (GObject *object)
 
   g_clear_object (&credential->handler);
   g_clear_object (&credential->impl);
+  g_clear_object (&credential->impl_signal_monitor);
+  g_clear_object (&credential->manager);
 
   G_OBJECT_CLASS (xdp_credential_parent_class)->dispose (object);
 }
@@ -165,17 +168,19 @@ static void xdp_credential_class_init (XdpCredentialClass *klass)
 
 static XdpCredential *
 xdp_credential_new(XdpContext *context,
-                   XdpDbusExperimentalHandlerCredential *handler,
                    XdpDbusExperimentalImplCredential *impl,
-                   XdpDbusExperimentalImplCredentialSignalMonitor *impl_signal_monitor)
+                   XdpDbusExperimentalImplCredentialSignalMonitor *impl_signal_monitor,
+                   CredentialsdDbusExperimentalManager *manager,
+                   XdpDbusExperimentalHandlerCredential *handler)
 {
   XdpCredential *credential;
 
   credential = g_object_new(xdp_credential_get_type(), NULL);
   credential->context = context;
-  credential->handler = g_object_ref(handler);
   credential->impl = g_object_ref(impl);
   credential->impl_signal_monitor = g_object_ref(impl_signal_monitor);
+  credential->manager = g_object_ref(manager);
+  credential->handler = g_object_ref(handler);
 
   g_dbus_proxy_set_default_timeout (G_DBUS_PROXY (credential->handler), G_MAXINT);
 
@@ -218,48 +223,6 @@ const gchar *CREDENTIALSD_HANDLER_DBUS_NAME =
 const gchar *CREDENTIALSD_DBUS_NAME =
     "xyz.iinuwa.credentialsd.Credentials";
 
-
-/*
-static DexFuture *
-needs_pin_fiber (gpointer user_data)
-{
-  g_autoptr (GError) error = NULL;
-
-  XdpCredential *credential = XDP_CREDENTIAL (user_data);
-
-  while (dex_channel_can_receive(credential->credsd_signal_monitor->needs_pin_channel))
-    {
-      g_autoptr (CredentialsdDbusExperimentalSessionNeedsPinSignal) signal = NULL;
-      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_needs_pin (
-          credential->credsd_signal_monitor
-        ),
-        &error
-      );
-
-      if (error)
-        {
-          // TODO: I think we can just exit since this means that the channel has closed and the portal has gone away.
-          g_warning("Failed to receive NeedsPin: %s (%d)", error->message, error->code);
-          break;
-        }
-      g_debug("Received NeedsPin from credentialsd");
-
-      XdpDbusExperimentalImplCredential *impl = credential->impl;
-      if (!dex_await (xdp_dbus_experimental_impl_credential_call_notify_needs_pin_future (
-          impl,
-          credential->backend_session_id,
-          signal->attempts_left,
-          signal->_options
-        ),
-        &error))
-        {
-          g_warning("Failed to send NeedsPin: %s (%d)", error->message, error->code);
-          // TODO: return error
-        }
-    }
-}
-*/
-
 DEFINE_CREDENTIALSD_SIGNAL_CB(
   NeedsPin, "NeedsPin", needs_pin, signal->attempts_left, signal->_options)
 
@@ -287,7 +250,8 @@ hybrid_started_fiber(gpointer user_data)
   XdpCredentialResponsePromise *response_promise = (XdpCredentialResponsePromise *)user_data;
   XdpCredential *credential = response_promise->credential;
 
-  while (dex_channel_can_receive(credential->credsd_signal_monitor->hybrid_started_channel))
+  DexChannel *channel = credential->credsd_signal_monitor->hybrid_started_channel;
+  while (channel != NULL && dex_channel_can_receive(channel))
     {
       g_autoptr (CredentialsdDbusExperimentalSessionHybridStartedSignal) signal = NULL;
       signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_hybrid_started (
@@ -318,9 +282,9 @@ hybrid_started_fiber(gpointer user_data)
       gboolean notified = dex_await (xdp_dbus_experimental_impl_credential_call_notify_hybrid_started_future (
           impl,
           credential->backend_session_id,
-          g_variant_new_uint32(0),
+          invocation_data_result->invocation_data,
           signal->_options,
-          fd_list
+          invocation_data_result->fd_list
         ),
         &error);
       if (!notified)
@@ -344,8 +308,9 @@ ceremony_completed_fiber(gpointer user_data)
 
   XdpCredentialResponsePromise *response_promise = (XdpCredentialResponsePromise *)user_data;
   XdpCredential *credential = response_promise->credential;
+  DexChannel *channel = credential->credsd_signal_monitor->ceremony_completed_channel;
 
-  while (dex_channel_can_receive(credential->credsd_signal_monitor->ceremony_completed_channel))
+  while (channel != NULL && dex_channel_can_receive(channel))
     {
       g_autoptr (CredentialsdDbusExperimentalSessionCeremonyCompletedSignal) signal = NULL;
       signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_ceremony_completed (
@@ -371,7 +336,7 @@ ceremony_completed_fiber(gpointer user_data)
       if (!notified)
           g_warning("Failed to send CeremonyCompleted %s (%d)", error->message, error->code);
       // Do we have ownership over the response?
-      dex_promise_resolve_variant (response_promise->promise, g_object_ref (signal->response));
+      dex_promise_resolve_variant (response_promise->promise, g_variant_ref (signal->response));
     }
     return dex_future_new_true();
 }
@@ -383,8 +348,9 @@ error_occurred_fiber(gpointer user_data)
 
   XdpCredentialResponsePromise *response_promise = (XdpCredentialResponsePromise *)user_data;
   XdpCredential *credential = response_promise->credential;
+  DexChannel *channel = credential->credsd_signal_monitor->error_occurred_channel;
 
-  while (dex_channel_can_receive(credential->credsd_signal_monitor->ceremony_completed_channel))
+  while (channel != NULL && dex_channel_can_receive(channel))
     {
       g_autoptr (CredentialsdDbusExperimentalSessionErrorOccurredSignal) signal = NULL;
       signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_error_occurred (
@@ -525,7 +491,6 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
 {
   XdpCredential *credential = XDP_CREDENTIAL (object);
   g_autoptr (XdpRequestDex) request = NULL;
-  g_autoptr (GVariant) options = NULL;
   g_autoptr (GError) error = NULL;
   g_autoptr (GVariant) frontend_options = NULL;
   g_autoptr (GVariantDict) backend_options_dict = NULL;
@@ -556,7 +521,7 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
         app_info,
         G_DBUS_INTERFACE_SKELETON (object),
         G_DBUS_PROXY (credential->impl),
-        options
+        frontend_options
     ),
     &error);
   if (!request)
@@ -593,13 +558,13 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
                                         NULL);
           return G_DBUS_METHOD_INVOCATION_HANDLED;
         }
-      credsd_session = dex_await_boxed (credentialsd_dbus_experimental_session_proxy_new_future (
+      credsd_session = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
           connection,
           G_DBUS_PROXY_FLAGS_NONE,
           CREDENTIALSD_DBUS_NAME,
           daemon_session_result->session_handle
         ), &error);
-      if (daemon_session_result == NULL)
+      if (credsd_session == NULL)
         {
           g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
           xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
@@ -609,7 +574,7 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
         daemon_session_handle = g_strdup (daemon_session_result->session_handle);
     }
 
-    GVariant *devices = credentialsd_dbus_experimental_session_get_devices (credsd_session);
+    GVariant *devices = credentialsd_dbus_experimental_session_get_devices (credential->credsd_session);
 
     g_variant_dict_insert (
         backend_options_dict,
@@ -675,7 +640,7 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
       }
 
     g_autoptr (GVariant) credential_response = dex_await_variant (DEX_FUTURE (response_promise->promise), &error);
-    if (credential_response == NULL)
+    if (error != NULL)
       {
         g_error ("Failed to get response for create credential: %s (%d)", error->message, error->code);
         xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
@@ -923,6 +888,7 @@ init_credential (gpointer user_data)
 
   XdpContext *context = XDP_CONTEXT (user_data);
   g_autoptr (XdpCredential) credential = NULL;
+  g_autoptr (CredentialsdDbusExperimentalManager) manager = NULL;
   g_autoptr (XdpDbusExperimentalHandlerCredential) handler = NULL;
   g_autoptr (XdpDbusExperimentalImplCredential) impl = NULL;
   g_autoptr (GError) error = NULL;
@@ -962,20 +928,24 @@ init_credential (gpointer user_data)
         XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_DISCOVERY_REQUESTED
       | XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_CLIENT_PIN_ENTERED
       | XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_CREDENTIAL_SELECTED;
-    impl_signal_monitor = xdp_dbus_experimental_impl_credential_signal_monitor_new(credential->impl, signals);
-    g_autoptr (DexFuture) discovery_requested_future = dex_scheduler_spawn (NULL,
-                                                                            0,
-                                                                            discovery_requested_fiber,
-                                                                            credential, NULL);
-    g_autoptr (DexFuture) client_pin_entered_future = dex_scheduler_spawn (NULL,
-                                                                            0,
-                                                                            client_pin_entered_fiber,
-                                                                            credential, NULL);
-    g_autoptr (DexFuture) credential_selected_future = dex_scheduler_spawn (NULL,
-                                                                            0,
-                                                                            credential_selected_fiber,
-                                                                            credential, NULL);
+    impl_signal_monitor = xdp_dbus_experimental_impl_credential_signal_monitor_new(impl, signals);
   }
+
+  g_debug ("creating credentialsd manager proxy...");
+
+  manager = dex_await_object (credentialsd_dbus_experimental_manager_proxy_new_future (
+      connection,
+      G_DBUS_PROXY_FLAGS_NONE,
+      CREDENTIALSD_DBUS_NAME,
+      "/xyz/iinuwa/credentialsd/Manager"
+    ),
+    &error);
+  if (manager == NULL)
+    {
+      g_warning ("Failed to create credentialsd manager proxy: %s", error->message);
+      return dex_future_new_false ();
+    }
+  g_debug ("created credentialsd manager proxy.");
 
   g_debug ("creating handler proxy...");
 
@@ -993,8 +963,24 @@ init_credential (gpointer user_data)
     }
   g_debug ("created handler proxy.");
 
-  credential = xdp_credential_new (context, g_steal_pointer (&handler), g_steal_pointer (&impl), g_steal_pointer (&impl_signal_monitor));
+  credential = xdp_credential_new (context,
+                                   g_steal_pointer (&impl),
+                                   g_steal_pointer (&impl_signal_monitor),
+                                   g_steal_pointer (&manager),
+                                   g_steal_pointer (&handler));
 
+  g_autoptr (DexFuture) discovery_requested_future = dex_scheduler_spawn (NULL,
+                                                                          0,
+                                                                          discovery_requested_fiber,
+                                                                          credential, NULL);
+  g_autoptr (DexFuture) client_pin_entered_future = dex_scheduler_spawn (NULL,
+                                                                          0,
+                                                                          client_pin_entered_fiber,
+                                                                          credential, NULL);
+  g_autoptr (DexFuture) credential_selected_future = dex_scheduler_spawn (NULL,
+                                                                          0,
+                                                                          credential_selected_fiber,
+                                                                          credential, NULL);
 
   xdp_context_take_and_export_portal (context,
                                       G_DBUS_INTERFACE_SKELETON (g_steal_pointer (&credential)),
