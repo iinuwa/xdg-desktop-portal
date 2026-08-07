@@ -668,27 +668,72 @@ static XdpOptionKey get_credential_options[] = {
   { "public_key", G_VARIANT_TYPE_STRING, NULL },
 };
 
+
 /**
  * get_credential_validate_options:
  * @arg_options: (transfer none): options passed to the frontend.
+ * @arg_type: (transfer none): options passed to the frontend.
+ * @frontend_options: (transfer none): options passed to the frontend.
+ * @backend_options: (transfer none): options passed to the frontend.
+ * @request_json: (transfer none): pointer to string to be filled with request JSON.
+ * @top_origin: (transfer none): pointer to string to top_origin field. May be NULL.
  * @error: (transfer none): pointer to an error pointer that will be populated on error.
  * Returns: (transfer full): Filtered list of options to pass to the handler.
  */
-static GVariant *
+static gboolean
 get_credential_validate_options (GVariant *arg_options,
-                                 GError  **error)
+                                 GVariant **frontend_options,
+                                 GVariantDict **backend_options,
+                                 gchar **request_json,
+                                 gchar **top_origin,
+                                 GError **error)
 {
-  g_auto (GVariantBuilder) options = G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
-  gboolean validated = xdp_filter_options (arg_options,
-                                           &options,
-                                           get_credential_options,
-                                           G_N_ELEMENTS (get_credential_options),
-                                           NULL,
-                                           error);
-  if (!validated)
-      return NULL;
-  else
-      return g_variant_ref_sink (g_variant_builder_end (&options));
+  g_auto (GVariantBuilder) options =
+      G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+  g_autofree gchar *json = NULL;
+  g_autofree gchar *top_origin_tmp = NULL;
+  g_autoptr (GVariantDict) backend_options_dict = NULL;
+
+  if (!xdp_filter_options (arg_options,
+                           &options,
+                           get_credential_options,
+                           G_N_ELEMENTS (get_credential_options),
+                           NULL,
+                           error))
+    {
+      return FALSE;
+    }
+
+  if (!g_variant_lookup (arg_options, "public_key", "s", &json))
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "Parameters for at least one credential type must be passed in `options` when retrieving a "
+                   "credential. Current supported credential types are: `public_key`");
+      return FALSE;
+    };
+
+  {
+    backend_options_dict = g_variant_dict_new (NULL);
+
+    gchar *activation_token = "";
+    // TODO: I don't think this else statement is necessary; check bug in credentialsd
+    if (g_variant_lookup (arg_options, "activation_token", "s", activation_token))
+      g_variant_dict_insert (backend_options_dict, "activation_token", "s", activation_token);
+    else
+      g_variant_dict_insert (backend_options_dict, "activation_token", "s", "");
+
+    if (!g_variant_lookup (arg_options, "top_origin", "s", &top_origin_tmp))
+      top_origin_tmp = g_strdup ("");
+    g_variant_dict_insert (backend_options_dict, "top_origin", "s", top_origin_tmp);
+  }
+
+  *frontend_options = g_variant_ref_sink (g_variant_builder_end (&options));
+  *backend_options = g_steal_pointer (&backend_options_dict);
+  *request_json = g_steal_pointer (&json);
+  *top_origin = g_steal_pointer (&top_origin_tmp);
+  return TRUE;
 }
 
 static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
@@ -699,27 +744,38 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
 {
   XdpCredential *credential = XDP_CREDENTIAL (object);
   g_autoptr (XdpRequestDex) request = NULL;
-  g_autoptr (GVariant) options = NULL;
   g_autoptr (GError) error = NULL;
+  g_autoptr (GVariant) frontend_options = NULL;
+  g_autoptr (GVariantDict) backend_options_dict = NULL;
+  g_autofree gchar *request_json = NULL;
+  g_autofree gchar *top_origin = NULL;
+  g_autofree gchar *daemon_session_handle = NULL;
+
 
   XdpAppInfo *app_info = xdp_invocation_get_app_info (invocation);
   const gchar *app_id = xdp_app_info_get_id (app_info);
 
-  options = get_credential_validate_options (arg_options, &error);
-  if (!options)
+  gboolean is_validated = get_credential_validate_options (arg_options,
+                                                           &frontend_options,
+                                                           &backend_options_dict,
+                                                           &request_json,
+                                                           &top_origin,
+                                                           &error);
+
+  if (!is_validated)
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
   request = dex_await_object (xdp_request_dex_new (
-                                  credential->context,
-                                  app_info,
-                                  G_DBUS_INTERFACE_SKELETON (object),
-                                  G_DBUS_PROXY (credential->handler),
-                                  options
-                              ),
-                              &error);
+        credential->context,
+        app_info,
+        G_DBUS_INTERFACE_SKELETON (object),
+        G_DBUS_PROXY (credential->impl),
+        frontend_options
+    ),
+    &error);
   if (!request)
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
@@ -733,29 +789,124 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
 
   {
     g_autoptr (XdpDbusExperimentalHandlerCredentialGetCredentialResult) result = NULL;
-    result = dex_await_boxed (xdp_dbus_experimental_handler_credential_call_get_credential_future (
-        credential->handler,
+    g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
+    g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
+
+    {
+      g_autoptr (CredentialsdDbusExperimentalManagerGetCredentialResult) daemon_session_result = NULL;
+      GDBusConnection *connection = xdp_context_get_connection (credential->context);
+      daemon_session_result = dex_await_boxed (credentialsd_dbus_experimental_manager_call_get_credential_future (
+          credential->manager,
+          arg_origin,
+          top_origin,
+          frontend_options
+        ),
+        &error);
+      if (daemon_session_result == NULL)
+        {
+          g_warning ("Failed to create proxy for credentialsd session on GetCredential: %s (%d)", error->message, error->code);
+          xdp_request_dex_emit_response (request,
+                                        XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
+                                        NULL);
+          return G_DBUS_METHOD_INVOCATION_HANDLED;
+        }
+      credsd_session = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
+          connection,
+          G_DBUS_PROXY_FLAGS_NONE,
+          CREDENTIALSD_DBUS_NAME,
+          daemon_session_result->session_handle
+        ), &error);
+      if (credsd_session == NULL)
+        {
+          g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
+          xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
+          return G_DBUS_METHOD_INVOCATION_HANDLED;
+        }
+        credential->credsd_session = credsd_session;
+        daemon_session_handle = g_strdup (daemon_session_result->session_handle);
+    }
+
+    GVariant *devices = credentialsd_dbus_experimental_session_get_devices (credential->credsd_session);
+
+    g_variant_dict_insert (
+        backend_options_dict,
+        "rp_id",
+        "s",
+        credentialsd_dbus_experimental_session_get_rp_id (credsd_session));
+    g_autoptr (GVariant) backend_options = g_variant_ref_sink (g_variant_dict_end (
+        g_steal_pointer (&backend_options_dict)));
+
+    // TODO: Make this conform to normal session naming convention.
+    credential->backend_session_id = g_steal_pointer (&daemon_session_handle);
+    // TODO: Remove this from backend.
+    int pid = -1;
+
+    if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
+        credential->impl,
+        credential->backend_session_id,
         arg_parent_window,
         arg_origin,
-        options,
-        app_id
+        CREDENTIAL_OPERATION_PUBLIC_KEY_GET,
+        devices,
+        app_id,
+        pid,
+        backend_options
       ),
-      &error);
-
-    if (result)
+      &error)
+    )
       {
-        xdp_request_dex_emit_response (request,
-                                      result->response,
-                                      result->results);
-      }
-    else
-      {
-        g_dbus_error_strip_remote_error (error);
-        g_warning ("Handler call failed: %s (%d)", error->message, error->code);
+        g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
         xdp_request_dex_emit_response (request,
                                       XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
                                       NULL);
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
       }
+
+    g_autoptr (DexPromise) promise = dex_promise_new();
+
+    CredentialsdDbusExperimentalSessionSignals signals =
+      CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_PIN
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_VERIFICATION
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_PRESENCE
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_STARTED
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTING
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTED
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NFC_CONNECTED
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_USB_CONNECTED
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_SELECTING_CREDENTIAL
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_CEREMONY_COMPLETED
+      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_ERROR_OCCURRED;
+    credsd_signal_monitor =
+      credentialsd_dbus_experimental_session_signal_monitor_new(credsd_session, signals);
+    credential->credsd_signal_monitor = g_object_ref (credsd_signal_monitor);
+
+    for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
+      {
+        XdpCredentialResponsePromise *response_promise = g_new0(XdpCredentialResponsePromise, 1);
+        response_promise->credential = credential;
+        response_promise->promise = dex_ref (promise);
+        DexFiberFunc fiber = public_key_credential_fibers[i];
+        // Do we want to explicitly cancel these individually, or just let the signal monitor cancellation catch it?
+        dex_future_disown (dex_scheduler_spawn (NULL, 0, fiber, response_promise, NULL));
+      }
+
+    g_autoptr (GVariant) credential_response = dex_await_variant (DEX_FUTURE (promise), &error);
+    if (error != NULL)
+      {
+        g_error ("Failed to get response for get credential: %s (%d)", error->message, error->code);
+        xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
+      }
+    else
+      {
+        xdp_request_dex_emit_response (request,
+                                      XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS,
+                                      credential_response);
+      }
+
+    
+    g_clear_pointer (&credential->backend_session_id, g_free);
+    g_clear_object (&credential->credsd_session);
+    g_clear_object (&credential->credsd_signal_monitor);
   }
 
   return G_DBUS_METHOD_INVOCATION_HANDLED;
