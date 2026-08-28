@@ -1000,8 +1000,9 @@ discovery_requested_fiber (gpointer user_data)
 
   XdpCredential *credential = XDP_CREDENTIAL (user_data);
 
-  while (dex_channel_can_receive(credential->impl_signal_monitor->discovery_requested_channel))
+  while (dex_channel_can_receive (credential->impl_signal_monitor->discovery_requested_channel))
     {
+
       g_autoptr (XdpDbusExperimentalImplCredentialDiscoveryRequestedSignal) signal = NULL;
       signal = dex_await_boxed (xdp_dbus_experimental_impl_credential_signal_monitor_next_discovery_requested (
           credential->impl_signal_monitor
@@ -1012,12 +1013,17 @@ discovery_requested_fiber (gpointer user_data)
       if (error)
         {
           // TODO: I think we can just exit since this means that the channel has closed and the portal has gone away.
-          g_warning("Failed to receive DiscoveryRequested: %s (%d)", error->message, error->code);
+          g_warning ("Failed to receive DiscoveryRequested: %s (%d)", error->message, error->code);
           break;
         }
-      g_debug("Received DiscoveryRequested from backend");
+      g_debug ("Received DiscoveryRequested from backend");
 
-      CredentialsdDbusExperimentalSession *daemon_session = credential->credsd_session;
+      if (credential->credsd_session == NULL)
+        {
+          // No active session, ignore this signal
+          continue;
+        }
+      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
       // TODO: What am I supposed to do with this session handle?
       // TODO: Do we need start options?
       if (!dex_await (credentialsd_dbus_experimental_session_call_start_future (
@@ -1035,9 +1041,8 @@ client_pin_entered_fiber (gpointer user_data)
   g_autoptr (GError) error = NULL;
 
   XdpCredential *credential = XDP_CREDENTIAL (user_data);
-  CredentialsdDbusExperimentalSession *daemon_session = credential->credsd_session;
 
-  while (dex_channel_can_receive(credential->impl_signal_monitor->client_pin_entered_channel))
+  while (dex_channel_can_receive (credential->impl_signal_monitor->client_pin_entered_channel))
     {
       g_autoptr (XdpDbusExperimentalImplCredentialClientPinEnteredSignal) signal = NULL;
       signal = dex_await_boxed (xdp_dbus_experimental_impl_credential_signal_monitor_next_client_pin_entered (
@@ -1054,6 +1059,12 @@ client_pin_entered_fiber (gpointer user_data)
         }
 
       g_debug ("Received ClientPinEntered from backend");
+      if (credential->credsd_session == NULL)
+        {
+          // No active session, ignore this signal
+          continue;
+        }
+      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
       // TODO: What am I supposed to do with this session handle?
       // TODO: gdbus/dex doesn't support receiving file descriptors over
       //       signals, need to convert this to a signal with a method to retrieve the
@@ -1079,7 +1090,6 @@ credential_selected_fiber (gpointer user_data)
   g_autoptr (GError) error = NULL;
 
   XdpCredential *credential = XDP_CREDENTIAL (user_data);
-  CredentialsdDbusExperimentalSession *daemon_session = credential->credsd_session;
 
   while (dex_channel_can_receive(credential->impl_signal_monitor->credential_selected_channel))
     {
@@ -1097,6 +1107,12 @@ credential_selected_fiber (gpointer user_data)
           break;
         }
       g_debug ("Received CredentialSelected from backend");
+      if (credential->credsd_session == NULL)
+        {
+          // No active session, ignoring this signal.
+          continue;
+        }
+      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
       // TODO: What am I supposed to do with this session handle?
       if (!dex_await (credentialsd_dbus_experimental_session_call_select_credential_future (
           daemon_session,
