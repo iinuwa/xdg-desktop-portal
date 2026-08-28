@@ -51,7 +51,6 @@
   {                                                                                                \
     g_autoptr (XdpCredential) credential = NULL;                                                   \
     g_autoptr (DexPromise) promise = NULL;                                                         \
-    g_autoptr (GError) error = NULL;                                                               \
                                                                                                    \
     {                                                                                              \
       g_autofree XdpCredentialResponsePromise *response_promise = g_steal_pointer (&user_data);    \
@@ -69,6 +68,7 @@
                                                                                                    \
     while (channel != NULL && dex_channel_can_receive(channel))                                    \
       {                                                                                            \
+        g_autoptr (GError) error = NULL;                                                           \
         g_autoptr (CredentialsdDbusExperimentalSession##signal_name##Signal) signal = NULL;        \
         signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_##snake_name ( \
             credential->credsd_signal_monitor                                                      \
@@ -257,7 +257,6 @@ hybrid_started_fiber(gpointer user_data)
 {
   g_autoptr (XdpCredential) credential = NULL;
   g_autoptr (DexPromise) promise = NULL;
-  g_autoptr (GError) error = NULL;
 
   {
     g_autofree XdpCredentialResponsePromise *response_promise = g_steal_pointer (&user_data);
@@ -274,6 +273,7 @@ hybrid_started_fiber(gpointer user_data)
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->hybrid_started_channel);
   while (channel != NULL && dex_channel_can_receive(channel))
     {
+      g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionHybridStartedSignal) signal = NULL;
       signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_hybrid_started (
           credential->credsd_signal_monitor
@@ -332,7 +332,6 @@ ceremony_completed_fiber(gpointer user_data)
 {
   g_autoptr (XdpCredential) credential = NULL;
   g_autoptr (DexPromise) promise = NULL;
-  g_autoptr (GError) error = NULL;
   {
     g_autofree XdpCredentialResponsePromise *response_promise = g_steal_pointer (&user_data);
     credential = g_steal_pointer (&response_promise->credential);
@@ -349,6 +348,7 @@ ceremony_completed_fiber(gpointer user_data)
 
   while (channel != NULL && dex_channel_can_receive(channel))
     {
+      g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionCeremonyCompletedSignal) signal = NULL;
       signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_ceremony_completed (
           credential->credsd_signal_monitor
@@ -388,7 +388,6 @@ error_occurred_fiber(gpointer user_data)
 {
   g_autoptr (XdpCredential) credential = NULL;
   g_autoptr (DexPromise) promise = NULL;
-  g_autoptr (GError) error = NULL;
 
   {
     g_autofree XdpCredentialResponsePromise *response_promise = g_steal_pointer (&user_data);
@@ -406,6 +405,7 @@ error_occurred_fiber(gpointer user_data)
 
   while (channel != NULL && dex_channel_can_receive(channel))
     {
+      g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionErrorOccurredSignal) signal = NULL;
       signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_error_occurred (
           credential->credsd_signal_monitor
