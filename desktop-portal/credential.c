@@ -865,7 +865,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   if (!is_validated)
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
+      goto out;
     }
 
   request = dex_await_object (xdp_request_dex_new (
@@ -879,7 +879,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   if (!request)
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
+      goto out;
     }
 
   xdp_dbus_experimental_credential_complete_get_credential (
