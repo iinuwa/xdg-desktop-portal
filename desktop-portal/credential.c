@@ -382,7 +382,7 @@ error_occurred_fiber(gpointer user_data)
   }
 
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor)  signal_monitor = g_object_ref (credential->credsd_signal_monitor);
-  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->ceremony_completed_channel);
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->error_occurred_channel);
 
   while (channel != NULL && dex_channel_can_receive(channel))
     {
