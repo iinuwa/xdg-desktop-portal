@@ -290,7 +290,7 @@ hybrid_started_fiber(gpointer user_data)
       if (!invocation_data_result)
       {
         // TODO: shutdown
-        g_error("Could not retrieve hybrid invocation data fd: %s (%d)", error->message, error->code);
+        g_warning("Could not retrieve hybrid invocation data fd: %s (%d)", error->message, error->code);
         return dex_future_new_false ();
       }
 
@@ -680,7 +680,7 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
     g_autoptr (GVariant) credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
     if (error != NULL)
       {
-        g_error ("Failed to get response for create credential: %s (%d)", error->message, error->code);
+        g_warning ("Failed to get response for create credential: %s (%d)", error->message, error->code);
         xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
       }
     else
@@ -850,7 +850,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
           xdp_request_dex_emit_response (request,
                                         XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
                                         NULL);
-          return G_DBUS_METHOD_INVOCATION_HANDLED;
+          goto out;
         }
       credsd_session = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
           connection,
@@ -862,7 +862,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
         {
           g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
           xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-          return G_DBUS_METHOD_INVOCATION_HANDLED;
+          goto out;
         }
         credential->credsd_session = g_steal_pointer (&credsd_session);
         daemon_session_handle = g_strdup (daemon_session_result->session_handle);
@@ -901,7 +901,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
         xdp_request_dex_emit_response (request,
                                       XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
                                       NULL);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
+        goto out;
       }
 
     g_autoptr (DexPromise) promise = dex_promise_new();
@@ -940,7 +940,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
     g_autoptr (GVariant) credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
     if (error != NULL)
       {
-        g_error ("Failed to get response for get credential: %s (%d)", error->message, error->code);
+        g_warning ("Failed to get response for get credential: %s (%d)", error->message, error->code);
         xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
       }
     else
@@ -963,12 +963,14 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
         dex_unref (signal_handler);
       }
 
+    goto out;
+  }
+
+  out:
     g_clear_pointer (&credential->backend_session_id, g_free);
     g_clear_object (&credential->credsd_session);
     g_clear_object (&credential->credsd_signal_monitor);
-  }
-
-  return G_DBUS_METHOD_INVOCATION_HANDLED;
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
 static DexFuture *
