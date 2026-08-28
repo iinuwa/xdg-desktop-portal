@@ -256,8 +256,8 @@ hybrid_started_fiber(gpointer user_data)
 
   {
     g_autofree XdpCredentialResponsePromise *response_promise = g_steal_pointer (&user_data);
-    credential = response_promise->credential;
-    promise = response_promise->promise;
+    credential = g_steal_pointer (&response_promise->credential);
+    promise = g_steal_pointer (&response_promise->promise);
   }
 
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor)  signal_monitor = g_object_ref (credential->credsd_signal_monitor);
