@@ -124,15 +124,53 @@ struct _XdpCredential
 {
   XdpDbusExperimentalCredentialSkeleton parent_instance;
 
+  /**
+   * Reference to the main context, not owned by this struct.
+   */
   XdpContext *context;
+
+  /**
+   * A D-Bus proxy for the xyz.iinuwa.credentialsd.Credentials interface.
+   * Valid for the lifetime of this portal.
+   */
   XdpDbusExperimentalHandlerCredential *handler;
+
+  /**
+   * A D-Bus proxy for the Credential Portal backend interface.
+   * Valid for the lifetime of this portal.
+   */
   XdpDbusExperimentalImplCredential *impl;
+
+  /**
+   * A signal monitor to receive signals from the backend proxy for the Credential Portal backend interface.
+   * Valid for the lifetime of this portal.
+   */
   XdpDbusExperimentalImplCredentialSignalMonitor *impl_signal_monitor;
+
+  /**
+   * A D-Bus proxy for the credentialsd Manager interface, which is used to start new credentialsd sessions.
+   * Valid for the lifetime of this portal.
+   */
   CredentialsdDbusExperimentalManager *manager;
 
-  // May be null
+  // Session-Specific Fields
+
+  /**
+   * A D-Bus proxy for a credentialsd Session object.
+   * Only valid for the lifetime of a single request.
+   */
   CredentialsdDbusExperimentalSession *credsd_session;
+
+  /**
+   * A Dex signal monitor for a credentialsd Session object.
+   * Only valid for the lifetime of a single request.
+   */
   CredentialsdDbusExperimentalSessionSignalMonitor *credsd_signal_monitor;
+
+  /**
+   * The session handle for a Credential Portal backend Session object.
+   * Only valid for the lifetime of a single request.
+   */
   gchar *backend_session_id;
 };
 
@@ -158,6 +196,8 @@ static void xdp_credential_iface_init (XdpDbusExperimentalCredentialIface *iface
 static void xdp_credential_dispose (GObject *object)
 {
   XdpCredential *credential = XDP_CREDENTIAL (object);
+
+  // credential->context is not owned by this object, so not clearing here.
 
   g_clear_object (&credential->handler);
   g_clear_object (&credential->impl);
