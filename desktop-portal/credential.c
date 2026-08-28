@@ -66,7 +66,7 @@
       }                                                                                            \
     g_autoptr (DexChannel) channel = dex_ref (signal_monitor->snake_name##_channel);               \
                                                                                                    \
-    while (channel != NULL && dex_channel_can_receive(channel))                                    \
+    while (dex_channel_can_receive (channel))                                                       \
       {                                                                                            \
         g_autoptr (GError) error = NULL;                                                           \
         g_autoptr (CredentialsdDbusExperimentalSession##signal_name##Signal) signal = NULL;        \
@@ -314,7 +314,7 @@ hybrid_started_fiber(gpointer user_data)
       return dex_future_new_false ();
     }
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->hybrid_started_channel);
-  while (channel != NULL && dex_channel_can_receive(channel))
+  while (dex_channel_can_receive (channel))
     {
       g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionHybridStartedSignal) signal = NULL;
@@ -387,7 +387,7 @@ ceremony_completed_fiber(gpointer user_data)
     }
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->ceremony_completed_channel);
 
-  while (channel != NULL && dex_channel_can_receive(channel))
+  while (dex_channel_can_receive (channel))
     {
       g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionCeremonyCompletedSignal) signal = NULL;
@@ -442,7 +442,7 @@ error_occurred_fiber(gpointer user_data)
     }
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->error_occurred_channel);
 
-  while (channel != NULL && dex_channel_can_receive(channel))
+  while (dex_channel_can_receive (channel))
     {
       g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionErrorOccurredSignal) signal = NULL;
@@ -1033,12 +1033,27 @@ discovery_requested_fiber (gpointer user_data)
 
   XdpCredential *credential = XDP_CREDENTIAL (user_data);
 
-  while (dex_channel_can_receive (credential->impl_signal_monitor->discovery_requested_channel))
+  if (credential->impl_signal_monitor == NULL)
+    {
+      g_error ("credential: backend signal monitor is NULL, cannot answer any requests");
+      return dex_future_new_false ();
+    }
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor =
+      g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
+
+  if (signal_monitor->discovery_requested_channel == NULL)
+    {
+      g_warning("credential: DiscoveryRequested channel was not subscribed in signal monitor");
+      return dex_future_new_false ();
+    }
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->discovery_requested_channel);
+
+  while (dex_channel_can_receive (channel))
     {
 
       g_autoptr (XdpDbusExperimentalImplCredentialDiscoveryRequestedSignal) signal = NULL;
       signal = dex_await_boxed (xdp_dbus_experimental_impl_credential_signal_monitor_next_discovery_requested (
-          credential->impl_signal_monitor
+          signal_monitor
         ),
         &error
       );
@@ -1075,7 +1090,22 @@ client_pin_entered_fiber (gpointer user_data)
 
   XdpCredential *credential = XDP_CREDENTIAL (user_data);
 
-  while (dex_channel_can_receive (credential->impl_signal_monitor->client_pin_entered_channel))
+  if (credential->impl_signal_monitor == NULL)
+    {
+      g_error ("credential: backend signal monitor is NULL, cannot answer any requests");
+      return dex_future_new_false ();
+    }
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor =
+      g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
+
+  if (signal_monitor->client_pin_entered_channel == NULL)
+    {
+      g_warning("credential: ClientPinEntered channel was not subscribed in signal monitor");
+      return dex_future_new_false ();
+    }
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->client_pin_entered_channel);
+
+  while (dex_channel_can_receive (channel))
     {
       g_autoptr (XdpDbusExperimentalImplCredentialClientPinEnteredSignal) signal = NULL;
       signal = dex_await_boxed (xdp_dbus_experimental_impl_credential_signal_monitor_next_client_pin_entered (
@@ -1124,11 +1154,26 @@ credential_selected_fiber (gpointer user_data)
 
   XdpCredential *credential = XDP_CREDENTIAL (user_data);
 
-  while (dex_channel_can_receive(credential->impl_signal_monitor->credential_selected_channel))
+  if (credential->impl_signal_monitor == NULL)
+    {
+      g_error ("credential: backend signal monitor is NULL, cannot answer any requests");
+      return dex_future_new_false ();
+    }
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor =
+     g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
+
+  if (signal_monitor->credential_selected_channel == NULL)
+    {
+      g_warning("credential: CredentialSelected channel was not subscribed in signal monitor");
+      return dex_future_new_false ();
+    }
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->credential_selected_channel);
+
+  while (dex_channel_can_receive (channel))
     {
       g_autoptr (XdpDbusExperimentalImplCredentialCredentialSelectedSignal) signal = NULL;
       signal = dex_await_boxed (xdp_dbus_experimental_impl_credential_signal_monitor_next_credential_selected (
-          credential->impl_signal_monitor
+          signal_monitor
         ),
         &error
       );
