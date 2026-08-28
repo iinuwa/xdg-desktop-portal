@@ -174,7 +174,6 @@ struct _XdpCredential
   gchar *backend_session_id;
 };
 
-#define XDP_TYPE_CREDENTIAL (xdp_dbus_experimental_credential_get_type ())
 G_DECLARE_FINAL_TYPE (XdpCredential, xdp_credential, XDP, CREDENTIAL, XdpDbusExperimentalCredentialSkeleton)
 
 static void
