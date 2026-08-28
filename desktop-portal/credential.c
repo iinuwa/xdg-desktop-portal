@@ -262,6 +262,17 @@ xdp_credential_new(XdpContext *context,
   return credential;
 }
 
+/**
+ * Clean up per-session fields.
+ */
+static void
+xdp_credential_cleanup_session (XdpCredential *credential)
+{
+  g_clear_pointer (&credential->backend_session_id, g_free);
+  g_clear_object (&credential->credsd_session);
+  g_clear_object (&credential->credsd_signal_monitor);
+}
+
 typedef struct XdpCredentialResponsePromise
 {
   XdpCredential *credential;
@@ -476,6 +487,184 @@ error_occurred_fiber(gpointer user_data)
     return dex_future_new_true();
 }
 
+/**
+ * Fiber functions to be used during a create or get credential request.
+ */
+static DexFiberFunc public_key_credential_fibers[] = {
+  needs_pin_fiber,
+  needs_user_verification_fiber,
+  needs_user_presence_fiber,
+  hybrid_started_fiber,
+  hybrid_connecting_fiber,
+  hybrid_connected_fiber,
+  nfc_connected_fiber,
+  usb_connected_fiber,
+  selecting_credential_fiber,
+  ceremony_completed_fiber,
+  error_occurred_fiber
+};
+
+
+/**
+ * Function to perform credential ceremony for either get or create.
+ */
+static gboolean
+handle_credential_request (
+  XdpCredential *credential,
+  XdpRequestDex *request,
+  enum CredentialOperation operation,
+  const gchar   *arg_parent_window,
+  const gchar   *arg_origin,
+  gchar         *top_origin,
+  GVariant      *frontend_options,
+  GVariantDict  *backend_options_dict,
+  const gchar   *app_id)
+{
+  g_autoptr (XdpDbusExperimentalHandlerCredentialGetCredentialResult) result = NULL;
+  g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
+  g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
+  g_autofree gchar *daemon_session_handle = NULL;
+  g_autoptr (GVariant) credential_response = NULL;
+  g_autoptr (DexPromise) promise = NULL;
+  g_autoptr (GVariant) backend_options = NULL;
+  g_autoptr (GError) error = NULL;
+
+  {
+    g_autoptr (CredentialsdDbusExperimentalManagerGetCredentialResult) daemon_session_result = NULL;
+    GDBusConnection *connection = xdp_context_get_connection (credential->context);
+    daemon_session_result = dex_await_boxed (credentialsd_dbus_experimental_manager_call_get_credential_future (
+        credential->manager,
+        arg_origin,
+        top_origin,
+        frontend_options
+      ),
+      &error);
+    if (daemon_session_result == NULL)
+      {
+        g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
+        xdp_request_dex_emit_response (request,
+                                      XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
+                                      NULL);
+        goto out;
+      }
+    credsd_session = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
+        connection,
+        G_DBUS_PROXY_FLAGS_NONE,
+        CREDENTIALSD_DBUS_NAME,
+        daemon_session_result->session_handle
+      ), &error);
+    if (credsd_session == NULL)
+      {
+        g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
+        xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
+        goto out;
+      }
+      credential->credsd_session = g_steal_pointer (&credsd_session);
+      daemon_session_handle = g_strdup (daemon_session_result->session_handle);
+  }
+
+  GVariant *devices = credentialsd_dbus_experimental_session_get_devices (credential->credsd_session);
+
+  g_variant_dict_insert (
+      backend_options_dict,
+      "rp_id",
+      "s",
+      credentialsd_dbus_experimental_session_get_rp_id (credential->credsd_session));
+  backend_options = g_variant_ref_sink (g_variant_dict_end (
+      g_steal_pointer (&backend_options_dict)));
+
+  // TODO: Make this conform to normal session naming convention.
+  credential->backend_session_id = g_steal_pointer (&daemon_session_handle);
+  // TODO: Remove this from backend.
+  int pid = 0;
+
+  if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
+      credential->impl,
+      credential->backend_session_id,
+      arg_parent_window,
+      arg_origin,
+      operation,
+      devices,
+      app_id,
+      pid,
+      backend_options
+    ),
+    &error)
+  )
+    {
+      g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
+      xdp_request_dex_emit_response (request,
+                                    XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
+                                    NULL);
+      goto out;
+    }
+
+  promise = dex_promise_new();
+
+  CredentialsdDbusExperimentalSessionSignals signals =
+    CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_PIN
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_VERIFICATION
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_PRESENCE
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_STARTED
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTING
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTED
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NFC_CONNECTED
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_USB_CONNECTED
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_SELECTING_CREDENTIAL
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_CEREMONY_COMPLETED
+    | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_ERROR_OCCURRED;
+  credsd_signal_monitor =
+    credentialsd_dbus_experimental_session_signal_monitor_new (credential->credsd_session, signals);
+  credential->credsd_signal_monitor = g_object_ref (credsd_signal_monitor);
+
+  /**
+    * we pass a reference to the Credential object and the promise to each
+    * signal handler. The response_promise is owned by each handler, and they
+    * are responsible for freeing the outer ResponsePromise struct and unref'ing the credential and promise.
+    */
+  DexFuture *signal_handlers[G_N_ELEMENTS (public_key_credential_fibers)];
+  for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
+    {
+      XdpCredentialResponsePromise *response_promise = g_new0(XdpCredentialResponsePromise, 1);
+      response_promise->credential = g_object_ref (credential);
+      response_promise->promise = dex_ref (promise);
+      DexFiberFunc fiber = public_key_credential_fibers[i];
+      signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, response_promise, NULL);
+    }
+
+  credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
+  if (error != NULL)
+    {
+      g_warning ("Failed to get credential response: %s (%d)", error->message, error->code);
+      xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
+    }
+  else
+    {
+      xdp_request_dex_emit_response (request,
+                                    XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS,
+                                    credential_response);
+    }
+
+  credentialsd_dbus_experimental_session_signal_monitor_cancel (credsd_signal_monitor);
+  dex_await (dex_future_allv (signal_handlers, G_N_ELEMENTS (public_key_credential_fibers)), &error);
+  if (error != NULL)
+    {
+      g_warning ("Failed waiting for credentialsd signal handlers to complete: %s (%d)", error->message, error->code);
+    }
+
+  for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
+    {
+      DexFuture *signal_handler = DEX_FUTURE (signal_handlers[i]);
+      dex_unref (signal_handler);
+    }
+
+  goto out;
+
+  out:
+    xdp_credential_cleanup_session(credential);
+    return G_DBUS_METHOD_INVOCATION_HANDLED;
+}
+
 static XdpOptionKey create_credential_options[] = {
   { "handle_token", G_VARIANT_TYPE_STRING, NULL },
   { "origin", G_VARIANT_TYPE_STRING, NULL },
@@ -560,24 +749,6 @@ create_credential_validate_options (GVariant *arg_options,
   return TRUE;
 }
 
-
-/**
- * Fiber functions to be used during a create or get credential request.
- */
-static DexFiberFunc public_key_credential_fibers[] = {
-  needs_pin_fiber,
-  needs_user_verification_fiber,
-  needs_user_presence_fiber,
-  hybrid_started_fiber,
-  hybrid_connecting_fiber,
-  hybrid_connected_fiber,
-  nfc_connected_fiber,
-  usb_connected_fiber,
-  selecting_credential_fiber,
-  ceremony_completed_fiber,
-  error_occurred_fiber
-};
-
 static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
                                           GDBusMethodInvocation         *invocation,
                                           const gchar                   *arg_parent_window,
@@ -631,134 +802,16 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
       invocation,
       xdp_request_dex_get_object_path (request));
 
-  {
-    g_autoptr (XdpDbusExperimentalHandlerCredentialCreateCredentialResult) result = NULL;
-    g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
-    g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
-
-    {
-      g_autoptr (CredentialsdDbusExperimentalManagerCreatePublicKeyCredentialResult) daemon_session_result = NULL;
-      GDBusConnection *connection = xdp_context_get_connection (credential->context);
-      daemon_session_result = dex_await_boxed (credentialsd_dbus_experimental_manager_call_create_public_key_credential_future (
-          credential->manager,
-          request_json,
-          arg_origin,
-          top_origin
-        ),
-        &error);
-      if (daemon_session_result == NULL)
-        {
-          g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
-          xdp_request_dex_emit_response (request,
-                                        XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
-                                        NULL);
-          return G_DBUS_METHOD_INVOCATION_HANDLED;
-        }
-      credsd_session = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
-          connection,
-          G_DBUS_PROXY_FLAGS_NONE,
-          CREDENTIALSD_DBUS_NAME,
-          daemon_session_result->session_handle
-        ), &error);
-      if (credsd_session == NULL)
-        {
-          g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
-          xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-          return G_DBUS_METHOD_INVOCATION_HANDLED;
-        }
-        credential->credsd_session = g_steal_pointer (&credsd_session);
-        daemon_session_handle = g_strdup (daemon_session_result->session_handle);
-    }
-
-    GVariant *devices = credentialsd_dbus_experimental_session_get_devices (credential->credsd_session);
-
-    g_variant_dict_insert (
-        backend_options_dict,
-        "rp_id",
-        "s",
-        credentialsd_dbus_experimental_session_get_rp_id (credential->credsd_session));
-    g_autoptr (GVariant) backend_options = g_variant_ref_sink (g_variant_dict_end (
-        g_steal_pointer (&backend_options_dict)));
-
-    // TODO: Make this conform to normal session naming convention.
-    credential->backend_session_id = g_steal_pointer (&daemon_session_handle);
-    // TODO: Remove this from backend.
-    int pid = -1;
-
-    if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
-        credential->impl,
-        credential->backend_session_id,
-        arg_parent_window,
-        arg_origin,
-        CREDENTIAL_OPERATION_PUBLIC_KEY_CREATE,
-        devices,
-        app_id,
-        pid,
-        backend_options
-      ),
-      &error)
-    )
-      {
-        g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
-        xdp_request_dex_emit_response (request,
-                                      XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
-                                      NULL);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
-      }
-
-    g_autoptr (DexPromise) promise = dex_promise_new();
-
-    CredentialsdDbusExperimentalSessionSignals signals =
-      CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_PIN
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_VERIFICATION
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_PRESENCE
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_STARTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTING
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NFC_CONNECTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_USB_CONNECTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_SELECTING_CREDENTIAL
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_CEREMONY_COMPLETED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_ERROR_OCCURRED;
-    credsd_signal_monitor =
-      credentialsd_dbus_experimental_session_signal_monitor_new(credential->credsd_session, signals);
-    credential->credsd_signal_monitor = g_object_ref (credsd_signal_monitor);
-
-    DexFuture *signal_handlers[G_N_ELEMENTS (public_key_credential_fibers)];
-    for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
-      {
-        XdpCredentialResponsePromise *response_promise = g_new0(XdpCredentialResponsePromise, 1);
-        response_promise->credential = g_object_ref (credential);
-        response_promise->promise = dex_ref (promise);
-        DexFiberFunc fiber = public_key_credential_fibers[i];
-        signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, response_promise, NULL);
-      }
-
-    g_autoptr (GVariant) credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
-    if (error != NULL)
-      {
-        g_warning ("Failed to get response for create credential: %s (%d)", error->message, error->code);
-        xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-      }
-    else
-      {
-        xdp_request_dex_emit_response (request,
-                                      XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS,
-                                      credential_response);
-      }
-
-    credentialsd_dbus_experimental_session_signal_monitor_cancel (credential->credsd_signal_monitor);
-    dex_await (dex_future_allv (signal_handlers, G_N_ELEMENTS (public_key_credential_fibers)), &error);
-    if (error != NULL)
-      {
-        g_warning ("Failed waiting for credentialsd signal handlers to complete: %s (%d)", error->message, error->code);
-      }
-    g_clear_pointer (&credential->backend_session_id, g_free);
-    g_clear_object (&credential->credsd_session);
-    g_clear_object (&credential->credsd_signal_monitor);
-  }
-
-  return G_DBUS_METHOD_INVOCATION_HANDLED;
+  return handle_credential_request(
+    credential,
+    request,
+    CREDENTIAL_OPERATION_PUBLIC_KEY_CREATE,
+    arg_parent_window,
+    arg_origin,
+    top_origin,
+    frontend_options,
+    backend_options_dict,
+    app_id);
 }
 
 static XdpOptionKey get_credential_options[] = {
@@ -845,7 +898,6 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   g_autoptr (GVariant) frontend_options = NULL;
   g_autoptr (GVariantDict) backend_options_dict = NULL;
   g_autofree gchar *top_origin = NULL;
-  g_autofree gchar *daemon_session_handle = NULL;
 
 
   XdpAppInfo *app_info = xdp_invocation_get_app_info (invocation);
@@ -860,7 +912,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   if (!is_validated)
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
-      goto out;
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
   request = dex_await_object (xdp_request_dex_new (
@@ -874,7 +926,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   if (!request)
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
-      goto out;
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
   xdp_dbus_experimental_credential_complete_get_credential (
@@ -882,148 +934,16 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
       invocation,
       xdp_request_dex_get_object_path (request));
 
-  {
-    g_autoptr (XdpDbusExperimentalHandlerCredentialGetCredentialResult) result = NULL;
-    g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
-    g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
-
-    {
-      g_autoptr (CredentialsdDbusExperimentalManagerGetCredentialResult) daemon_session_result = NULL;
-      GDBusConnection *connection = xdp_context_get_connection (credential->context);
-      daemon_session_result = dex_await_boxed (credentialsd_dbus_experimental_manager_call_get_credential_future (
-          credential->manager,
-          arg_origin,
-          top_origin,
-          frontend_options
-        ),
-        &error);
-      if (daemon_session_result == NULL)
-        {
-          g_warning ("Failed to create proxy for credentialsd session on GetCredential: %s (%d)", error->message, error->code);
-          xdp_request_dex_emit_response (request,
-                                        XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
-                                        NULL);
-          goto out;
-        }
-      credsd_session = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
-          connection,
-          G_DBUS_PROXY_FLAGS_NONE,
-          CREDENTIALSD_DBUS_NAME,
-          daemon_session_result->session_handle
-        ), &error);
-      if (credsd_session == NULL)
-        {
-          g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
-          xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-          goto out;
-        }
-        credential->credsd_session = g_steal_pointer (&credsd_session);
-        daemon_session_handle = g_strdup (daemon_session_result->session_handle);
-    }
-
-    GVariant *devices = credentialsd_dbus_experimental_session_get_devices (credential->credsd_session);
-
-    g_variant_dict_insert (
-        backend_options_dict,
-        "rp_id",
-        "s",
-        credentialsd_dbus_experimental_session_get_rp_id (credential->credsd_session));
-    g_autoptr (GVariant) backend_options = g_variant_ref_sink (g_variant_dict_end (
-        g_steal_pointer (&backend_options_dict)));
-
-    // TODO: Make this conform to normal session naming convention.
-    credential->backend_session_id = g_steal_pointer (&daemon_session_handle);
-    // TODO: Remove this from backend.
-    int pid = -1;
-
-    if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
-        credential->impl,
-        credential->backend_session_id,
-        arg_parent_window,
-        arg_origin,
-        CREDENTIAL_OPERATION_PUBLIC_KEY_GET,
-        devices,
-        app_id,
-        pid,
-        backend_options
-      ),
-      &error)
-    )
-      {
-        g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
-        xdp_request_dex_emit_response (request,
-                                      XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
-                                      NULL);
-        goto out;
-      }
-
-    g_autoptr (DexPromise) promise = dex_promise_new();
-
-    CredentialsdDbusExperimentalSessionSignals signals =
-      CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_PIN
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_VERIFICATION
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_PRESENCE
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_STARTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTING
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_HYBRID_CONNECTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NFC_CONNECTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_USB_CONNECTED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_SELECTING_CREDENTIAL
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_CEREMONY_COMPLETED
-      | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_ERROR_OCCURRED;
-    credsd_signal_monitor =
-      credentialsd_dbus_experimental_session_signal_monitor_new (credential->credsd_session, signals);
-    credential->credsd_signal_monitor = g_object_ref (credsd_signal_monitor);
-
-    /**
-     * we pass a reference to the Credential object and the promise to each
-     * signal handler. The response_promise is owned by each handler, and they
-     * are responsible for freeing the outer ResponsePromise struct and unref'ing the credential and promise.
-     */
-    DexFuture *signal_handlers[G_N_ELEMENTS (public_key_credential_fibers)];
-    for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
-      {
-        XdpCredentialResponsePromise *response_promise = g_new0(XdpCredentialResponsePromise, 1);
-        response_promise->credential = g_object_ref (credential);
-        response_promise->promise = dex_ref (promise);
-        DexFiberFunc fiber = public_key_credential_fibers[i];
-        signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, response_promise, NULL);
-      }
-
-    g_autoptr (GVariant) credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
-    if (error != NULL)
-      {
-        g_warning ("Failed to get response for get credential: %s (%d)", error->message, error->code);
-        xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-      }
-    else
-      {
-        xdp_request_dex_emit_response (request,
-                                      XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS,
-                                      credential_response);
-      }
-
-    credentialsd_dbus_experimental_session_signal_monitor_cancel (credsd_signal_monitor);
-    dex_await (dex_future_allv (signal_handlers, G_N_ELEMENTS (public_key_credential_fibers)), &error);
-    if (error != NULL)
-      {
-        g_warning ("Failed waiting for credentialsd signal handlers to complete: %s (%d)", error->message, error->code);
-      }
-
-    for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
-      {
-        DexFuture *signal_handler = DEX_FUTURE (signal_handlers[i]);
-        dex_unref (signal_handler);
-      }
-
-    goto out;
-  }
-
-  out:
-    g_clear_pointer (&credential->backend_session_id, g_free);
-    g_clear_object (&credential->credsd_session);
-    g_clear_object (&credential->credsd_signal_monitor);
-    return G_DBUS_METHOD_INVOCATION_HANDLED;
+  return handle_credential_request(
+    credential,
+    request,
+    CREDENTIAL_OPERATION_PUBLIC_KEY_GET,
+    arg_parent_window,
+    arg_origin,
+    top_origin,
+    frontend_options,
+    backend_options_dict,
+    app_id);
 }
 
 static DexFuture *
