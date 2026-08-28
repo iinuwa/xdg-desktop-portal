@@ -71,7 +71,7 @@
         g_autoptr (GError) error = NULL;                                                           \
         g_autoptr (CredentialsdDbusExperimentalSession##signal_name##Signal) signal = NULL;        \
         signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_##snake_name ( \
-            credential->credsd_signal_monitor                                                      \
+            signal_monitor                                                                         \
           ),                                                                                       \
           &error                                                                                   \
         );                                                                                         \
@@ -264,7 +264,7 @@ hybrid_started_fiber(gpointer user_data)
     promise = g_steal_pointer (&response_promise->promise);
   }
 
-  g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor)  signal_monitor = g_object_ref (credential->credsd_signal_monitor);
+  g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) signal_monitor = g_object_ref (credential->credsd_signal_monitor);
   if (signal_monitor->hybrid_started_channel == NULL)
     {
       g_warning ("credential: HybridStarted not registered in signal monitor");
@@ -275,9 +275,7 @@ hybrid_started_fiber(gpointer user_data)
     {
       g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionHybridStartedSignal) signal = NULL;
-      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_hybrid_started (
-          credential->credsd_signal_monitor
-        ),
+      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_hybrid_started (signal_monitor),
         &error
       );
 
@@ -350,9 +348,7 @@ ceremony_completed_fiber(gpointer user_data)
     {
       g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionCeremonyCompletedSignal) signal = NULL;
-      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_ceremony_completed (
-          credential->credsd_signal_monitor
-        ),
+      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_ceremony_completed (signal_monitor),
         &error
       );
 
@@ -407,9 +403,7 @@ error_occurred_fiber(gpointer user_data)
     {
       g_autoptr (GError) error = NULL;
       g_autoptr (CredentialsdDbusExperimentalSessionErrorOccurredSignal) signal = NULL;
-      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_error_occurred (
-          credential->credsd_signal_monitor
-        ),
+      signal = dex_await_boxed (credentialsd_dbus_experimental_session_signal_monitor_next_error_occurred (signal_monitor),
         &error
       );
 
