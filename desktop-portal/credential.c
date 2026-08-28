@@ -677,7 +677,7 @@ static gboolean handle_create_credential (XdpDbusExperimentalCredential *object,
         signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, response_promise, NULL);
       }
 
-    g_autoptr (GVariant) credential_response = dex_await_variant (DEX_FUTURE (promise), &error);
+    g_autoptr (GVariant) credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
     if (error != NULL)
       {
         g_error ("Failed to get response for create credential: %s (%d)", error->message, error->code);
@@ -937,7 +937,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
         signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, response_promise, NULL);
       }
 
-    g_autoptr (GVariant) credential_response = dex_await_variant (DEX_FUTURE (promise), &error);
+    g_autoptr (GVariant) credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
     if (error != NULL)
       {
         g_error ("Failed to get response for get credential: %s (%d)", error->message, error->code);
