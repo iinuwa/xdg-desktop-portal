@@ -56,10 +56,15 @@
     {                                                                                              \
       g_autofree XdpCredentialResponsePromise *response_promise = g_steal_pointer (&user_data);    \
       credential = g_steal_pointer (&response_promise->credential);                                \
-      promise = g_steal_pointer (&response_promise->promise);                                       \
+      promise = g_steal_pointer (&response_promise->promise);                                      \
     }                                                                                              \
     g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) signal_monitor =                  \
       g_object_ref (credential->credsd_signal_monitor);                                            \
+    if (signal_monitor->snake_name##_channel == NULL)                                              \
+      {                                                                                            \
+        g_warning ("credential: " signal_str " not registered in signal monitor");                 \
+        return dex_future_new_false ();                                                            \
+      }                                                                                            \
     g_autoptr (DexChannel) channel = dex_ref (signal_monitor->snake_name##_channel);               \
                                                                                                    \
     while (channel != NULL && dex_channel_can_receive(channel))                                    \
@@ -261,6 +266,11 @@ hybrid_started_fiber(gpointer user_data)
   }
 
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor)  signal_monitor = g_object_ref (credential->credsd_signal_monitor);
+  if (signal_monitor->hybrid_started_channel == NULL)
+    {
+      g_warning ("credential: HybridStarted not registered in signal monitor");
+      return dex_future_new_false ();
+    }
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->hybrid_started_channel);
   while (channel != NULL && dex_channel_can_receive(channel))
     {
@@ -330,6 +340,11 @@ ceremony_completed_fiber(gpointer user_data)
   }
 
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor)  signal_monitor = g_object_ref (credential->credsd_signal_monitor);
+  if (signal_monitor->ceremony_completed_channel == NULL)
+    {
+      g_warning ("credential: CeremonyCompleted not registered in signal monitor");
+      return dex_future_new_false ();
+    }
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->ceremony_completed_channel);
 
   while (channel != NULL && dex_channel_can_receive(channel))
@@ -382,6 +397,11 @@ error_occurred_fiber(gpointer user_data)
   }
 
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor)  signal_monitor = g_object_ref (credential->credsd_signal_monitor);
+  if (signal_monitor->error_occurred_channel == NULL)
+    {
+      g_warning ("credential: ErrorOccurred not registered in signal monitor");
+      return dex_future_new_false ();
+    }
   g_autoptr (DexChannel) channel = dex_ref (signal_monitor->error_occurred_channel);
 
   while (channel != NULL && dex_channel_can_receive(channel))
