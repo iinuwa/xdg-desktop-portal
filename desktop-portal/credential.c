@@ -784,7 +784,6 @@ static gboolean
 get_credential_validate_options (GVariant *arg_options,
                                  GVariant **frontend_options,
                                  GVariantDict **backend_options,
-                                 gchar **request_json,
                                  gchar **top_origin,
                                  GError **error)
 {
@@ -804,7 +803,7 @@ get_credential_validate_options (GVariant *arg_options,
       return FALSE;
     }
 
-  if (!g_variant_lookup (arg_options, "public_key", "s", &json))
+  if (!g_variant_lookup (arg_options, "public_key", "*", NULL))
     {
       g_set_error (error,
                    XDG_DESKTOP_PORTAL_ERROR,
@@ -831,7 +830,6 @@ get_credential_validate_options (GVariant *arg_options,
 
   *frontend_options = g_variant_ref_sink (g_variant_builder_end (&options));
   *backend_options = g_steal_pointer (&backend_options_dict);
-  *request_json = g_steal_pointer (&json);
   *top_origin = g_steal_pointer (&top_origin_tmp);
   return TRUE;
 }
@@ -847,7 +845,6 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   g_autoptr (GError) error = NULL;
   g_autoptr (GVariant) frontend_options = NULL;
   g_autoptr (GVariantDict) backend_options_dict = NULL;
-  g_autofree gchar *request_json = NULL;
   g_autofree gchar *top_origin = NULL;
   g_autofree gchar *daemon_session_handle = NULL;
 
@@ -858,7 +855,6 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
   gboolean is_validated = get_credential_validate_options (arg_options,
                                                            &frontend_options,
                                                            &backend_options_dict,
-                                                           &request_json,
                                                            &top_origin,
                                                            &error);
 
