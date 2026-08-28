@@ -204,6 +204,10 @@ static void xdp_credential_dispose (GObject *object)
   g_clear_object (&credential->impl_signal_monitor);
   g_clear_object (&credential->manager);
 
+  g_clear_object (&credential->credsd_session);
+  g_clear_object (&credential->credsd_signal_monitor);
+  g_clear_object (&credential->backend_session_id);
+
   G_OBJECT_CLASS (xdp_credential_parent_class)->dispose (object);
 }
 
@@ -973,7 +977,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
       | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_CEREMONY_COMPLETED
       | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_ERROR_OCCURRED;
     credsd_signal_monitor =
-      credentialsd_dbus_experimental_session_signal_monitor_new(credential->credsd_session, signals);
+      credentialsd_dbus_experimental_session_signal_monitor_new (credential->credsd_session, signals);
     credential->credsd_signal_monitor = g_object_ref (credsd_signal_monitor);
 
     /**
@@ -1004,7 +1008,7 @@ static gboolean handle_get_credential (XdpDbusExperimentalCredential *object,
                                       credential_response);
       }
 
-    credentialsd_dbus_experimental_session_signal_monitor_cancel (credential->credsd_signal_monitor);
+    credentialsd_dbus_experimental_session_signal_monitor_cancel (credsd_signal_monitor);
     dex_await (dex_future_allv (signal_handlers, G_N_ELEMENTS (public_key_credential_fibers)), &error);
     if (error != NULL)
       {
