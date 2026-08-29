@@ -682,7 +682,7 @@ static XdpOptionKey create_credential_options[] = {
  * @request_json: (transfer none): pointer to string to be filled with request JSON.
  * @top_origin: (transfer none): pointer to string to top_origin field. May be NULL.
  * @error: (transfer none): pointer to an error pointer that will be populated on error.
- * Returns: (transfer full): Filtered list of options to pass to the handler.
+ * Returns: TRUE when options are validated successfully.
  */
 static gboolean
 create_credential_validate_options (GVariant *arg_options,
@@ -824,13 +824,11 @@ static XdpOptionKey get_credential_options[] = {
 /**
  * get_credential_validate_options:
  * @arg_options: (transfer none): options passed to the frontend.
- * @arg_type: (transfer none): options passed to the frontend.
  * @frontend_options: (transfer none): options passed to the frontend.
  * @backend_options: (transfer none): options passed to the frontend.
- * @request_json: (transfer none): pointer to string to be filled with request JSON.
  * @top_origin: (transfer none): pointer to string to top_origin field. May be NULL.
  * @error: (transfer none): pointer to an error pointer that will be populated on error.
- * Returns: (transfer full): Filtered list of options to pass to the handler.
+ * Returns: A boolean when options are successfully validated.
  */
 static gboolean
 get_credential_validate_options (GVariant *arg_options,
