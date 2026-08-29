@@ -251,6 +251,7 @@ xdp_credential_new (XdpContext *context, XdpDbusExperimentalImplCredential *impl
 static void
 xdp_credential_cleanup_session (XdpCredential *credential)
 {
+  g_clear_object (&credential->impl_signal_monitor);
   g_clear_pointer (&credential->backend_session_id, g_free);
   g_clear_object (&credential->credsd_session);
   g_clear_object (&credential->credsd_signal_monitor);
@@ -466,6 +467,184 @@ static DexFiberFunc public_key_credential_fibers[]
       nfc_connected_fiber,      usb_connected_fiber,           selecting_credential_fiber,
       ceremony_completed_fiber, error_occurred_fiber };
 
+static DexFuture *
+discovery_requested_fiber (gpointer user_data)
+{
+  g_autoptr (GError) error = NULL;
+
+  XdpCredential *credential = XDP_CREDENTIAL (user_data);
+
+  if (credential->impl_signal_monitor == NULL)
+    {
+      g_error ("credential: backend signal monitor is NULL, cannot answer any "
+               "requests");
+      return dex_future_new_false ();
+    }
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor
+    = g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
+
+  if (signal_monitor->discovery_requested_channel == NULL)
+    {
+      g_warning ("credential: DiscoveryRequested channel was not subscribed "
+                 "in signal monitor");
+      return dex_future_new_false ();
+    }
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->discovery_requested_channel);
+
+  while (dex_channel_can_receive (channel))
+    {
+
+      g_autoptr (XdpDbusExperimentalImplCredentialDiscoveryRequestedSignal) signal = NULL;
+      signal = dex_await_boxed (
+        xdp_dbus_experimental_impl_credential_signal_monitor_next_discovery_requested (signal_monitor), &error);
+
+      if (error)
+        {
+          // TODO: I think we can just exit since this means that the channel
+          // has closed and the portal has gone away.
+          g_warning ("Failed to receive DiscoveryRequested: %s (%d)", error->message, error->code);
+          break;
+        }
+      g_debug ("Received DiscoveryRequested from backend");
+
+      if (credential->credsd_session == NULL)
+        {
+          // No active session, ignore this signal
+          continue;
+        }
+      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
+      // TODO: What am I supposed to do with this session handle?
+      // TODO: Do we need start options?
+      if (!dex_await (credentialsd_dbus_experimental_session_call_start_future (daemon_session), &error))
+        {
+          g_warning ("Failed to send Start() %s (%d)", error->message, error->code);
+        }
+    }
+  return dex_future_new_true ();
+}
+
+static DexFuture *
+client_pin_entered_fiber (gpointer user_data)
+{
+  g_autoptr (GError) error = NULL;
+
+  XdpCredential *credential = XDP_CREDENTIAL (user_data);
+
+  if (credential->impl_signal_monitor == NULL)
+    {
+      g_error ("credential: backend signal monitor is NULL, cannot answer any "
+               "requests");
+      return dex_future_new_false ();
+    }
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor
+    = g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
+
+  if (signal_monitor->client_pin_entered_channel == NULL)
+    {
+      g_warning ("credential: ClientPinEntered channel was not subscribed in "
+                 "signal monitor");
+      return dex_future_new_false ();
+    }
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->client_pin_entered_channel);
+
+  while (dex_channel_can_receive (channel))
+    {
+      g_autoptr (XdpDbusExperimentalImplCredentialClientPinEnteredSignal) signal = NULL;
+      signal = dex_await_boxed (
+        xdp_dbus_experimental_impl_credential_signal_monitor_next_client_pin_entered (credential->impl_signal_monitor),
+        &error);
+
+      if (error)
+        {
+          // TODO: I think we can just exit since this means that the channel
+          // has closed and the portal has gone away.
+          g_warning ("Failed to receive ClientPinEntered: %s (%d)", error->message, error->code);
+          break;
+        }
+
+      g_debug ("Received ClientPinEntered from backend");
+      if (credential->credsd_session == NULL)
+        {
+          // No active session, ignore this signal
+          continue;
+        }
+      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
+      // TODO: What am I supposed to do with this session handle?
+      // TODO: gdbus/dex doesn't support receiving file descriptors over
+      //       signals, need to convert this to a signal with a method to
+      //       retrieve the data.
+      if (!dex_await (credentialsd_dbus_experimental_session_call_enter_client_pin_future (
+                        daemon_session, signal->pin_fd, signal->options, NULL),
+                      &error))
+        {
+          g_warning ("Failed to call EnterClientPin() %s (%d)", error->message, error->code);
+        }
+    }
+
+  return dex_future_new_true ();
+}
+
+static DexFuture *
+credential_selected_fiber (gpointer user_data)
+{
+  g_autoptr (GError) error = NULL;
+
+  XdpCredential *credential = XDP_CREDENTIAL (user_data);
+
+  if (credential->impl_signal_monitor == NULL)
+    {
+      g_error ("credential: backend signal monitor is NULL, cannot answer any "
+               "requests");
+      return dex_future_new_false ();
+    }
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor
+    = g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
+
+  if (signal_monitor->credential_selected_channel == NULL)
+    {
+      g_warning ("credential: CredentialSelected channel was not subscribed "
+                 "in signal monitor");
+      return dex_future_new_false ();
+    }
+  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->credential_selected_channel);
+
+  while (dex_channel_can_receive (channel))
+    {
+      g_autoptr (XdpDbusExperimentalImplCredentialCredentialSelectedSignal) signal = NULL;
+      signal = dex_await_boxed (
+        xdp_dbus_experimental_impl_credential_signal_monitor_next_credential_selected (signal_monitor), &error);
+
+      if (error)
+        {
+          // TODO: I think we can just exit since this means that the channel
+          // has closed and the portal has gone away.
+          g_warning ("Failed to receive CredentialSelected: %s (%d)", error->message, error->code);
+          break;
+        }
+      g_debug ("Received CredentialSelected from backend");
+      if (credential->credsd_session == NULL)
+        {
+          // No active session, ignoring this signal.
+          continue;
+        }
+      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
+      // TODO: What am I supposed to do with this session handle?
+      if (!dex_await (credentialsd_dbus_experimental_session_call_select_credential_future (daemon_session, signal->id,
+                                                                                            signal->options),
+                      &error))
+        {
+          g_warning ("Failed to call SelectCredential() %s (%d)", error->message, error->code);
+        }
+    }
+  return dex_future_new_true ();
+}
+
+static DexFiberFunc public_key_credential_impl_fibers[] = {
+  discovery_requested_fiber,
+  client_pin_entered_fiber,
+  credential_selected_fiber,
+};
+
 /**
  * Function to perform credential ceremony for either get or create.
  */
@@ -477,6 +656,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
   g_autoptr (XdpDbusExperimentalHandlerCredentialGetCredentialResult) result = NULL;
   g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
+  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) impl_signal_monitor = NULL;
   g_autofree gchar *daemon_session_handle = NULL;
   g_autoptr (GVariant) credential_response = NULL;
   g_autoptr (DexPromise) promise = NULL;
@@ -519,6 +699,20 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
   credential->backend_session_id = g_steal_pointer (&daemon_session_handle);
   // TODO: Remove this from backend.
   int pid = 0;
+
+  XdpDbusExperimentalImplCredentialSignals impl_signals
+    = XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_DISCOVERY_REQUESTED
+      | XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_CLIENT_PIN_ENTERED
+      | XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_CREDENTIAL_SELECTED;
+  impl_signal_monitor = xdp_dbus_experimental_impl_credential_signal_monitor_new (credential->impl, impl_signals);
+  credential->impl_signal_monitor = g_object_ref (impl_signal_monitor);
+
+  DexFuture *impl_signal_handlers[G_N_ELEMENTS (public_key_credential_impl_fibers)];
+  for (int i = 0; i < G_N_ELEMENTS (public_key_credential_impl_fibers); i++)
+    {
+      DexFiberFunc fiber = public_key_credential_impl_fibers[i];
+      impl_signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, g_object_ref (credential), NULL);
+    }
 
   if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
                     credential->impl, credential->backend_session_id, arg_parent_window, arg_origin, operation, devices,
@@ -587,6 +781,21 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
   for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
     {
       DexFuture *signal_handler = DEX_FUTURE (signal_handlers[i]);
+      dex_unref (signal_handler);
+    }
+
+  xdp_dbus_experimental_impl_credential_signal_monitor_cancel (impl_signal_monitor);
+  dex_await (dex_future_allv (impl_signal_handlers, G_N_ELEMENTS (public_key_credential_impl_fibers)), &error);
+  if (error != NULL)
+    {
+      g_warning ("Failed waiting for impl signal handlers to "
+                 "complete: %s (%d)",
+                 error->message, error->code);
+    }
+
+  for (int i = 0; i < G_N_ELEMENTS (public_key_credential_impl_fibers); i++)
+    {
+      DexFuture *signal_handler = DEX_FUTURE (impl_signal_handlers[i]);
       dex_unref (signal_handler);
     }
 
@@ -814,178 +1023,6 @@ handle_get_credential (XdpDbusExperimentalCredential *object, GDBusMethodInvocat
                                     arg_origin, top_origin, frontend_options, backend_options_dict, app_id);
 }
 
-static DexFuture *
-discovery_requested_fiber (gpointer user_data)
-{
-  g_autoptr (GError) error = NULL;
-
-  XdpCredential *credential = XDP_CREDENTIAL (user_data);
-
-  if (credential->impl_signal_monitor == NULL)
-    {
-      g_error ("credential: backend signal monitor is NULL, cannot answer any "
-               "requests");
-      return dex_future_new_false ();
-    }
-  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor
-    = g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
-
-  if (signal_monitor->discovery_requested_channel == NULL)
-    {
-      g_warning ("credential: DiscoveryRequested channel was not subscribed "
-                 "in signal monitor");
-      return dex_future_new_false ();
-    }
-  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->discovery_requested_channel);
-
-  while (dex_channel_can_receive (channel))
-    {
-
-      g_autoptr (XdpDbusExperimentalImplCredentialDiscoveryRequestedSignal) signal = NULL;
-      signal = dex_await_boxed (
-        xdp_dbus_experimental_impl_credential_signal_monitor_next_discovery_requested (signal_monitor), &error);
-
-      if (error)
-        {
-          // TODO: I think we can just exit since this means that the channel
-          // has closed and the portal has gone away.
-          g_warning ("Failed to receive DiscoveryRequested: %s (%d)", error->message, error->code);
-          break;
-        }
-      g_debug ("Received DiscoveryRequested from backend");
-
-      if (credential->credsd_session == NULL)
-        {
-          // No active session, ignore this signal
-          continue;
-        }
-      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
-      // TODO: What am I supposed to do with this session handle?
-      // TODO: Do we need start options?
-      if (!dex_await (credentialsd_dbus_experimental_session_call_start_future (daemon_session), &error))
-        {
-          g_warning ("Failed to send Start() %s (%d)", error->message, error->code);
-        }
-    }
-  return dex_future_new_true ();
-}
-
-static DexFuture *
-client_pin_entered_fiber (gpointer user_data)
-{
-  g_autoptr (GError) error = NULL;
-
-  XdpCredential *credential = XDP_CREDENTIAL (user_data);
-
-  if (credential->impl_signal_monitor == NULL)
-    {
-      g_error ("credential: backend signal monitor is NULL, cannot answer any "
-               "requests");
-      return dex_future_new_false ();
-    }
-  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor
-    = g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
-
-  if (signal_monitor->client_pin_entered_channel == NULL)
-    {
-      g_warning ("credential: ClientPinEntered channel was not subscribed in "
-                 "signal monitor");
-      return dex_future_new_false ();
-    }
-  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->client_pin_entered_channel);
-
-  while (dex_channel_can_receive (channel))
-    {
-      g_autoptr (XdpDbusExperimentalImplCredentialClientPinEnteredSignal) signal = NULL;
-      signal = dex_await_boxed (
-        xdp_dbus_experimental_impl_credential_signal_monitor_next_client_pin_entered (credential->impl_signal_monitor),
-        &error);
-
-      if (error)
-        {
-          // TODO: I think we can just exit since this means that the channel
-          // has closed and the portal has gone away.
-          g_warning ("Failed to receive ClientPinEntered: %s (%d)", error->message, error->code);
-          break;
-        }
-
-      g_debug ("Received ClientPinEntered from backend");
-      if (credential->credsd_session == NULL)
-        {
-          // No active session, ignore this signal
-          continue;
-        }
-      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
-      // TODO: What am I supposed to do with this session handle?
-      // TODO: gdbus/dex doesn't support receiving file descriptors over
-      //       signals, need to convert this to a signal with a method to
-      //       retrieve the data.
-      if (!dex_await (credentialsd_dbus_experimental_session_call_enter_client_pin_future (
-                        daemon_session, signal->pin_fd, signal->options, NULL),
-                      &error))
-        {
-          g_warning ("Failed to call EnterClientPin() %s (%d)", error->message, error->code);
-        }
-    }
-
-  return dex_future_new_true ();
-}
-
-static DexFuture *
-credential_selected_fiber (gpointer user_data)
-{
-  g_autoptr (GError) error = NULL;
-
-  XdpCredential *credential = XDP_CREDENTIAL (user_data);
-
-  if (credential->impl_signal_monitor == NULL)
-    {
-      g_error ("credential: backend signal monitor is NULL, cannot answer any "
-               "requests");
-      return dex_future_new_false ();
-    }
-  g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) signal_monitor
-    = g_object_ref (XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_MONITOR (credential->impl_signal_monitor));
-
-  if (signal_monitor->credential_selected_channel == NULL)
-    {
-      g_warning ("credential: CredentialSelected channel was not subscribed "
-                 "in signal monitor");
-      return dex_future_new_false ();
-    }
-  g_autoptr (DexChannel) channel = dex_ref (signal_monitor->credential_selected_channel);
-
-  while (dex_channel_can_receive (channel))
-    {
-      g_autoptr (XdpDbusExperimentalImplCredentialCredentialSelectedSignal) signal = NULL;
-      signal = dex_await_boxed (
-        xdp_dbus_experimental_impl_credential_signal_monitor_next_credential_selected (signal_monitor), &error);
-
-      if (error)
-        {
-          // TODO: I think we can just exit since this means that the channel
-          // has closed and the portal has gone away.
-          g_warning ("Failed to receive CredentialSelected: %s (%d)", error->message, error->code);
-          break;
-        }
-      g_debug ("Received CredentialSelected from backend");
-      if (credential->credsd_session == NULL)
-        {
-          // No active session, ignoring this signal.
-          continue;
-        }
-      g_autoptr (CredentialsdDbusExperimentalSession) daemon_session = g_object_ref (credential->credsd_session);
-      // TODO: What am I supposed to do with this session handle?
-      if (!dex_await (credentialsd_dbus_experimental_session_call_select_credential_future (daemon_session, signal->id,
-                                                                                            signal->options),
-                      &error))
-        {
-          g_warning ("Failed to call SelectCredential() %s (%d)", error->message, error->code);
-        }
-    }
-  return dex_future_new_true ();
-}
-
 DexFuture *
 init_credential (gpointer user_data)
 {
@@ -1062,13 +1099,6 @@ init_credential (gpointer user_data)
 
   credential = xdp_credential_new (context, g_steal_pointer (&impl), g_steal_pointer (&impl_signal_monitor),
                                    g_steal_pointer (&manager), g_steal_pointer (&handler));
-
-  g_autoptr (DexFuture) discovery_requested_future
-    = dex_scheduler_spawn (NULL, 0, discovery_requested_fiber, credential, NULL);
-  g_autoptr (DexFuture) client_pin_entered_future
-    = dex_scheduler_spawn (NULL, 0, client_pin_entered_fiber, credential, NULL);
-  g_autoptr (DexFuture) credential_selected_future
-    = dex_scheduler_spawn (NULL, 0, credential_selected_fiber, credential, NULL);
 
   xdp_context_take_and_export_portal (context, G_DBUS_INTERFACE_SKELETON (g_steal_pointer (&credential)),
                                       XDP_CONTEXT_EXPORT_FLAGS_RUN_IN_FIBER);
