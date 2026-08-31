@@ -697,6 +697,9 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
   g_autoptr (DexPromise) promise = NULL;
   g_autoptr (GVariant) backend_options = NULL;
   g_autoptr (GError) error = NULL;
+  DexFuture *impl_signal_handlers[G_N_ELEMENTS (public_key_credential_impl_fibers)] = { NULL };
+  DexFuture *signal_handlers[G_N_ELEMENTS (public_key_credential_fibers)] = { NULL };
+  gboolean ret = FALSE;
 
   {
     GDBusConnection *connection = xdp_context_get_connection (credential->context);
@@ -764,7 +767,6 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
       | XDP_DBUS_EXPERIMENTAL_IMPL_CREDENTIAL_SIGNAL_CREDENTIAL_SELECTED;
   impl_signal_monitor = xdp_dbus_experimental_impl_credential_signal_monitor_new (credential->impl, impl_signals);
 
-  DexFuture *impl_signal_handlers[G_N_ELEMENTS (public_key_credential_impl_fibers)];
   for (int i = 0; i < G_N_ELEMENTS (public_key_credential_impl_fibers); i++)
     {
       DexFiberFunc fiber = public_key_credential_impl_fibers[i];
@@ -794,7 +796,6 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
    * signal handler. The ctx is owned by each handler, and they
    * are responsible for freeing the XdpCredentialRequestCtx struct.
    */
-  DexFuture *signal_handlers[G_N_ELEMENTS (public_key_credential_fibers)];
   for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
     {
       XdpCredentialRequestCtx *ctx = g_new0 (XdpCredentialRequestCtx, 1);
@@ -812,7 +813,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
     {
       g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
       xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-      return FALSE;
+      goto out;
     }
 
   credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
@@ -820,42 +821,62 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
     {
       g_warning ("Failed to get credential response: %s (%d)", error->message, error->code);
       xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-      g_clear_error (&error);
+      goto out;
     }
   else
     {
       xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS, credential_response);
+      goto out;
     }
 
-  credentialsd_dbus_experimental_session_signal_monitor_cancel (credsd_signal_monitor);
-  dex_await (dex_future_allv (signal_handlers, G_N_ELEMENTS (public_key_credential_fibers)), &error);
-  if (error != NULL)
+out:
+  ret = (error == NULL);
+  g_clear_error (&error);
+
+  // Clean up credentialsd Session signal handlers
+  if (credsd_signal_monitor != NULL)
     {
-      g_warning ("Failed waiting for credentialsd signal handlers to complete: %s (%d)", error->message, error->code);
-      g_clear_error (&error);
+      credentialsd_dbus_experimental_session_signal_monitor_cancel (credsd_signal_monitor);
+      dex_await (dex_future_allv (signal_handlers, G_N_ELEMENTS (public_key_credential_fibers)), &error);
+      if (error != NULL)
+        {
+          g_warning ("Failed waiting for credentialsd signal handlers to complete: %s (%d)", error->message,
+                     error->code);
+          g_clear_error (&error);
+        }
+
+      for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
+        {
+          if (signal_handlers[i] != NULL)
+            {
+              DexFuture *signal_handler = DEX_FUTURE (signal_handlers[i]);
+              dex_unref (signal_handler);
+            }
+        }
     }
 
-  for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
+  // Clean up impl backend Session signal handlers
+  if (impl_signal_monitor != NULL)
     {
-      DexFuture *signal_handler = DEX_FUTURE (signal_handlers[i]);
-      dex_unref (signal_handler);
+      xdp_dbus_experimental_impl_credential_signal_monitor_cancel (impl_signal_monitor);
+      dex_await (dex_future_allv (impl_signal_handlers, G_N_ELEMENTS (public_key_credential_impl_fibers)), &error);
+      if (error != NULL)
+        {
+          g_warning ("Failed waiting for impl signal handlers to complete: %s (%d)", error->message, error->code);
+          g_clear_error (&error);
+        }
+
+      for (int i = 0; i < G_N_ELEMENTS (public_key_credential_impl_fibers); i++)
+        {
+          if (impl_signal_handlers[i] != NULL)
+            {
+              DexFuture *signal_handler = DEX_FUTURE (impl_signal_handlers[i]);
+              dex_unref (signal_handler);
+            }
+        }
     }
 
-  xdp_dbus_experimental_impl_credential_signal_monitor_cancel (impl_signal_monitor);
-  dex_await (dex_future_allv (impl_signal_handlers, G_N_ELEMENTS (public_key_credential_impl_fibers)), &error);
-  if (error != NULL)
-    {
-      g_warning ("Failed waiting for impl signal handlers to complete: %s (%d)", error->message, error->code);
-      g_clear_error (&error);
-    }
-
-  for (int i = 0; i < G_N_ELEMENTS (public_key_credential_impl_fibers); i++)
-    {
-      DexFuture *signal_handler = DEX_FUTURE (impl_signal_handlers[i]);
-      dex_unref (signal_handler);
-    }
-
-  return TRUE;
+  return ret;
 }
 
 static XdpOptionKey create_credential_options[] = {
