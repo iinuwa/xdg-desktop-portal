@@ -731,6 +731,10 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
           }
         daemon_session_handle = g_strdup (daemon_session_result->session_handle);
       }
+    else
+      {
+        g_assert_not_reached ();
+      }
     credsd_session
       = dex_await_object (credentialsd_dbus_experimental_session_proxy_new_future (
                             connection, G_DBUS_PROXY_FLAGS_NONE, CREDENTIALSD_DBUS_NAME, daemon_session_handle),
