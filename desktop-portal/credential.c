@@ -711,7 +711,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
           {
             g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
             xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-            return G_DBUS_METHOD_INVOCATION_HANDLED;
+            return FALSE;
           }
         daemon_session_handle = g_strdup (daemon_session_result->session_handle);
       }
@@ -727,7 +727,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
           {
             g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
             xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-            return G_DBUS_METHOD_INVOCATION_HANDLED;
+            return FALSE;
           }
         daemon_session_handle = g_strdup (daemon_session_result->session_handle);
       }
@@ -743,7 +743,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
       {
         g_warning ("Failed to create proxy for credentialsd session: %s (%d)", error->message, error->code);
         xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-        return G_DBUS_METHOD_INVOCATION_HANDLED;
+        return FALSE;
       }
   }
 
@@ -782,7 +782,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
     {
       g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
       xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
+      return FALSE;
     }
 
   CredentialsdDbusExperimentalSessionSignals signals
@@ -855,7 +855,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
       dex_unref (signal_handler);
     }
 
-  return G_DBUS_METHOD_INVOCATION_HANDLED;
+  return TRUE;
 }
 
 static XdpOptionKey create_credential_options[] = {
@@ -977,8 +977,10 @@ handle_create_credential (XdpDbusExperimentalCredential *object, GDBusMethodInvo
   xdp_dbus_experimental_credential_complete_create_credential (object, invocation,
                                                                xdp_request_dex_get_object_path (request));
 
-  return handle_credential_request (credential, request, CREDENTIAL_OPERATION_PUBLIC_KEY_CREATE, arg_parent_window,
-                                    arg_origin, top_origin, request_json, backend_options_dict, app_id);
+  handle_credential_request (credential, request, CREDENTIAL_OPERATION_PUBLIC_KEY_CREATE, arg_parent_window, arg_origin,
+                             top_origin, request_json, backend_options_dict, app_id);
+
+  return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
 static XdpOptionKey get_credential_options[] = {
@@ -1086,8 +1088,10 @@ handle_get_credential (XdpDbusExperimentalCredential *object, GDBusMethodInvocat
   xdp_dbus_experimental_credential_complete_get_credential (object, invocation,
                                                             xdp_request_dex_get_object_path (request));
 
-  return handle_credential_request (credential, request, CREDENTIAL_OPERATION_PUBLIC_KEY_GET, arg_parent_window,
-                                    arg_origin, top_origin, frontend_options, backend_options_dict, app_id);
+  handle_credential_request (credential, request, CREDENTIAL_OPERATION_PUBLIC_KEY_GET, arg_parent_window, arg_origin,
+                             top_origin, frontend_options, backend_options_dict, app_id);
+
+  return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
 DexFuture *
