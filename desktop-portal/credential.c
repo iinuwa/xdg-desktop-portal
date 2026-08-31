@@ -517,7 +517,7 @@ discovery_requested_fiber (gpointer user_data)
 
   if (ctx->impl_signal_monitor == NULL)
     {
-      g_error ("credential: backend signal monitor is NULL, cannot answer any requests");
+      g_warning ("credential: backend signal monitor is NULL, cannot answer any requests");
       return dex_future_new_false ();
     }
 
@@ -571,7 +571,7 @@ client_pin_entered_fiber (gpointer user_data)
 
   if (ctx->impl_signal_monitor == NULL)
     {
-      g_error ("credential: backend signal monitor is NULL, cannot answer any requests");
+      g_warning ("credential: backend signal monitor is NULL, cannot answer any requests");
       return dex_future_new_false ();
     }
 
@@ -630,7 +630,7 @@ credential_selected_fiber (gpointer user_data)
 
   if (ctx->impl_signal_monitor == NULL)
     {
-      g_error ("credential: backend signal monitor is NULL, cannot answer any requests");
+      g_warning ("credential: backend signal monitor is NULL, cannot answer any requests");
       return dex_future_new_false ();
     }
 
