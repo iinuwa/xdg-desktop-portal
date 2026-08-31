@@ -788,8 +788,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
       | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_SELECTING_CREDENTIAL
       | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_CEREMONY_COMPLETED
       | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_ERROR_OCCURRED;
-  credsd_signal_monitor
-    = credentialsd_dbus_experimental_session_signal_monitor_new (g_object_ref (credsd_session), signals);
+  credsd_signal_monitor = credentialsd_dbus_experimental_session_signal_monitor_new (credsd_session, signals);
 
   /**
    * we pass a reference to the Credential object and the request data to each
