@@ -93,6 +93,8 @@ enum CredentialOperation
   CREDENTIAL_OPERATION_PUBLIC_KEY_GET = 1,
 };
 
+GQuark quark_credentialsd_error;
+
 static gboolean handle_create_credential (XdpDbusExperimentalCredential *object, GDBusMethodInvocation *invocation,
                                           const gchar *arg_parent_window, const gchar *arg_origin,
                                           const gchar *arg_type, GVariant *arg_options);
@@ -121,6 +123,8 @@ struct _XdpCredential
    * Valid for the lifetime of this portal.
    */
   CredentialsdDbusExperimentalManager *manager;
+
+  gboolean request_is_active;
 };
 
 G_DECLARE_FINAL_TYPE (XdpCredential, xdp_credential, XDP, CREDENTIAL, XdpDbusExperimentalCredentialSkeleton)
@@ -174,6 +178,8 @@ xdp_credential_new (XdpContext *context, XdpDbusExperimentalImplCredential *impl
   credential->context = context;
   credential->impl = g_object_ref (impl);
   credential->manager = g_object_ref (manager);
+
+  credential->request_is_active = FALSE;
 
   xdp_dbus_experimental_credential_set_conditional_create (XDP_DBUS_EXPERIMENTAL_CREDENTIAL (credential), FALSE);
   xdp_dbus_experimental_credential_set_conditional_get (XDP_DBUS_EXPERIMENTAL_CREDENTIAL (credential), FALSE);
@@ -289,7 +295,37 @@ xdp_credential_request_ctx_free (XdpCredentialRequestCtx *self)
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (XdpCredentialRequestCtx, xdp_credential_request_ctx_free)
 
-GQuark quark_credentialsd_error;
+typedef struct _XdpCredentialRequestGuard
+{
+  XdpCredential *credential;
+} XdpCredentialRequestGuard;
+
+static void
+xdp_credential_request_guard_cleanup (XdpCredentialRequestGuard *self)
+{
+  g_atomic_int_set (&self->credential->request_is_active, FALSE);
+  g_free (self);
+}
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (XdpCredentialRequestGuard, xdp_credential_request_guard_cleanup)
+
+/**
+ * xdp_credential_guard_request:
+ * @credential: The Credential portal context.
+ * @guard: A pointer to memory to initialize the guard object.
+ */
+static gboolean
+xdp_credential_guard_request (XdpCredential *credential, XdpCredentialRequestGuard **guard, GError **error)
+{
+  if (!g_atomic_int_compare_and_exchange (&credential->request_is_active, FALSE, TRUE))
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_BUSY, "Request is already in progress");
+      return FALSE;
+    }
+  *guard = g_new0 (XdpCredentialRequestGuard, 1);
+  (*guard)->credential = credential;
+  return TRUE;
+}
 
 const gchar *CREDENTIALSD_DBUS_NAME = "xyz.iinuwa.credentialsd.Credentials";
 
@@ -898,6 +934,13 @@ handle_create_credential (XdpDbusExperimentalCredential *object, GDBusMethodInvo
   g_autofree gchar *request_json = NULL;
   g_autofree gchar *top_origin = NULL;
   g_autofree gchar *daemon_session_handle = NULL;
+  g_autoptr (XdpCredentialRequestGuard) guard = NULL;
+
+  if (!xdp_credential_guard_request (credential, &guard, &error))
+    {
+      g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    };
 
   XdpAppInfo *app_info = xdp_invocation_get_app_info (invocation);
   const gchar *app_id = xdp_app_info_get_id (app_info);
@@ -1000,6 +1043,13 @@ handle_get_credential (XdpDbusExperimentalCredential *object, GDBusMethodInvocat
   g_autoptr (GVariant) frontend_options = NULL;
   g_autoptr (GVariantDict) backend_options_dict = NULL;
   g_autofree gchar *top_origin = NULL;
+  g_autoptr (XdpCredentialRequestGuard) guard = NULL;
+
+  if (!xdp_credential_guard_request (credential, &guard, &error))
+    {
+      g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation), error);
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    };
 
   XdpAppInfo *app_info = xdp_invocation_get_app_info (invocation);
   const gchar *app_id = xdp_app_info_get_id (app_info);
