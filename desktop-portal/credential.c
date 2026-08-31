@@ -811,6 +811,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
     {
       g_warning ("Failed to get credential response: %s (%d)", error->message, error->code);
       xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
+      g_clear_error (&error);
     }
   else
     {
@@ -822,6 +823,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
   if (error != NULL)
     {
       g_warning ("Failed waiting for credentialsd signal handlers to complete: %s (%d)", error->message, error->code);
+      g_clear_error (&error);
     }
 
   for (int i = 0; i < G_N_ELEMENTS (public_key_credential_fibers); i++)
@@ -835,6 +837,7 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
   if (error != NULL)
     {
       g_warning ("Failed waiting for impl signal handlers to complete: %s (%d)", error->message, error->code);
+      g_clear_error (&error);
     }
 
   for (int i = 0; i < G_N_ELEMENTS (public_key_credential_impl_fibers); i++)
