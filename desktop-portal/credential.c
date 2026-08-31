@@ -775,16 +775,6 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
       impl_signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, ctx, NULL);
     }
 
-  if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
-                    credential->impl, daemon_session_handle, arg_parent_window, arg_origin, operation, devices, app_id,
-                    pid, backend_options),
-                  &error))
-    {
-      g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
-      xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
-      return FALSE;
-    }
-
   CredentialsdDbusExperimentalSessionSignals signals
     = CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_PIN
       | CREDENTIALSD_DBUS_EXPERIMENTAL_SESSION_SIGNAL_NEEDS_USER_VERIFICATION
@@ -813,6 +803,16 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
                                                         dex_ref (promise), g_object_ref (credsd_signal_monitor));
       DexFiberFunc fiber = public_key_credential_fibers[i];
       signal_handlers[i] = dex_scheduler_spawn (NULL, 0, fiber, ctx, NULL);
+    }
+
+  if (!dex_await (xdp_dbus_experimental_impl_credential_call_create_session_future (
+                    credential->impl, daemon_session_handle, arg_parent_window, arg_origin, operation, devices, app_id,
+                    pid, backend_options),
+                  &error))
+    {
+      g_warning ("Failed to create backend session: %s (%d)", error->message, error->code);
+      xdp_request_dex_emit_response (request, XDG_DESKTOP_PORTAL_RESPONSE_OTHER, NULL);
+      return FALSE;
     }
 
   credential_response = dex_await_variant (dex_ref (DEX_FUTURE (promise)), &error);
