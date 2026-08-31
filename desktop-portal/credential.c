@@ -168,6 +168,12 @@ xdp_credential_class_init (XdpCredentialClass *klass)
   object_class->dispose = xdp_credential_dispose;
 }
 
+/**
+ * xdp_credential_new:
+ * @context: (transfer none): Portal context.
+ * @impl: (transfer full): D-Bus proxy for Credential portal backend interface.
+ * @manager: (transfer full): D-Bus proxy for credentialsd Manager interface.
+ */
 static XdpCredential *
 xdp_credential_new (XdpContext *context, XdpDbusExperimentalImplCredential *impl,
                     CredentialsdDbusExperimentalManager *manager)
@@ -176,8 +182,8 @@ xdp_credential_new (XdpContext *context, XdpDbusExperimentalImplCredential *impl
 
   credential = g_object_new (xdp_credential_get_type (), NULL);
   credential->context = context;
-  credential->impl = g_object_ref (impl);
-  credential->manager = g_object_ref (manager);
+  credential->impl = impl;
+  credential->manager = manager;
 
   credential->request_is_active = FALSE;
 
@@ -507,7 +513,6 @@ static DexFiberFunc public_key_credential_fibers[]
 static DexFuture *
 discovery_requested_fiber (gpointer user_data)
 {
-  g_autoptr (GError) error = NULL;
   g_autoptr (XdpCredentialRequestCtx) ctx = (XdpCredentialRequestCtx *)user_data;
 
   if (ctx->impl_signal_monitor == NULL)
@@ -526,6 +531,7 @@ discovery_requested_fiber (gpointer user_data)
 
   while (dex_channel_can_receive (channel))
     {
+      g_autoptr (GError) error = NULL;
       g_autoptr (XdpDbusExperimentalImplCredentialDiscoveryRequestedSignal) signal = NULL;
       signal = dex_await_boxed (
         xdp_dbus_experimental_impl_credential_signal_monitor_next_discovery_requested (ctx->impl_signal_monitor),
@@ -561,7 +567,6 @@ discovery_requested_fiber (gpointer user_data)
 static DexFuture *
 client_pin_entered_fiber (gpointer user_data)
 {
-  g_autoptr (GError) error = NULL;
   g_autoptr (XdpCredentialRequestCtx) ctx = (XdpCredentialRequestCtx *)user_data;
 
   if (ctx->impl_signal_monitor == NULL)
@@ -580,6 +585,7 @@ client_pin_entered_fiber (gpointer user_data)
 
   while (dex_channel_can_receive (channel))
     {
+      g_autoptr (GError) error = NULL;
       g_autoptr (XdpDbusExperimentalImplCredentialClientPinEnteredSignal) signal = NULL;
       signal = dex_await_boxed (
         xdp_dbus_experimental_impl_credential_signal_monitor_next_client_pin_entered (ctx->impl_signal_monitor),
@@ -620,8 +626,6 @@ client_pin_entered_fiber (gpointer user_data)
 static DexFuture *
 credential_selected_fiber (gpointer user_data)
 {
-  g_autoptr (GError) error = NULL;
-
   g_autoptr (XdpCredentialRequestCtx) ctx = (XdpCredentialRequestCtx *)user_data;
 
   if (ctx->impl_signal_monitor == NULL)
@@ -639,6 +643,7 @@ credential_selected_fiber (gpointer user_data)
 
   while (dex_channel_can_receive (channel))
     {
+      g_autoptr (GError) error = NULL;
       g_autoptr (XdpDbusExperimentalImplCredentialCredentialSelectedSignal) signal = NULL;
       signal = dex_await_boxed (
         xdp_dbus_experimental_impl_credential_signal_monitor_next_credential_selected (ctx->impl_signal_monitor),
