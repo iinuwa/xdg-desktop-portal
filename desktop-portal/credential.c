@@ -513,7 +513,7 @@ static DexFiberFunc public_key_credential_fibers[]
 static DexFuture *
 discovery_requested_fiber (gpointer user_data)
 {
-  g_autoptr (XdpCredentialRequestCtx) ctx = (XdpCredentialRequestCtx *)user_data;
+  g_autoptr (XdpCredentialRequestCtx) ctx = g_steal_pointer (&user_data);
 
   if (ctx->impl_signal_monitor == NULL)
     {
@@ -567,7 +567,7 @@ discovery_requested_fiber (gpointer user_data)
 static DexFuture *
 client_pin_entered_fiber (gpointer user_data)
 {
-  g_autoptr (XdpCredentialRequestCtx) ctx = (XdpCredentialRequestCtx *)user_data;
+  g_autoptr (XdpCredentialRequestCtx) ctx = g_steal_pointer (&user_data);
 
   if (ctx->impl_signal_monitor == NULL)
     {
@@ -626,7 +626,7 @@ client_pin_entered_fiber (gpointer user_data)
 static DexFuture *
 credential_selected_fiber (gpointer user_data)
 {
-  g_autoptr (XdpCredentialRequestCtx) ctx = (XdpCredentialRequestCtx *)user_data;
+  g_autoptr (XdpCredentialRequestCtx) ctx = g_steal_pointer (&user_data);
 
   if (ctx->impl_signal_monitor == NULL)
     {
