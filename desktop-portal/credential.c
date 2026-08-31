@@ -681,8 +681,8 @@ static DexFiberFunc public_key_credential_impl_fibers[] = {
  */
 static gboolean
 handle_credential_request (XdpCredential *credential, XdpRequestDex *request, enum CredentialOperation operation,
-                           const gchar *arg_parent_window, const gchar *arg_origin, gchar *top_origin,
-                           void *data, GVariantDict *backend_options_dict, const gchar *app_id)
+                           const gchar *arg_parent_window, const gchar *arg_origin, gchar *top_origin, void *data,
+                           GVariantDict *backend_options_dict, const gchar *app_id)
 {
   g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
@@ -1133,8 +1133,7 @@ init_credential (gpointer user_data)
     }
   g_debug ("created credentialsd manager proxy.");
 
-  credential
-    = xdp_credential_new (context, g_steal_pointer (&impl), g_steal_pointer (&manager));
+  credential = xdp_credential_new (context, g_steal_pointer (&impl), g_steal_pointer (&manager));
 
   xdp_context_take_and_export_portal (context, G_DBUS_INTERFACE_SKELETON (g_steal_pointer (&credential)),
                                       XDP_CONTEXT_EXPORT_FLAGS_RUN_IN_FIBER);
