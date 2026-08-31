@@ -240,14 +240,14 @@ typedef struct _XdpCredentialRequestCtx
 } XdpCredentialRequestCtx;
 
 /**
- * xdp_credential_request_ctx_new_for_backend:
+ * xdp_credential_request_ctx_init_for_backend:
  * @credential: (transfer full): Reference to the portal context.
  * @backend_session_id: (transfer full): Session ID for this request.
  * @credsd_session: (transfer full): D-Bus proxy for the related credentialsd Session object.
  * @promise: (transfer full): Promise to return to the caller.
  * @impl_signal_monitor: (transfer full): Signal monitor with all backend signals subscribed.
  *
- * Create a new request context for use in a Credential portal signal backend handler.
+ * Initialize request context for use in a Credential portal signal backend handler.
  */
 static void
 xdp_credential_request_ctx_init_for_backend (XdpCredentialRequestCtx *self, XdpCredential *credential,
@@ -264,14 +264,14 @@ xdp_credential_request_ctx_init_for_backend (XdpCredentialRequestCtx *self, XdpC
 }
 
 /**
- * xdp_credential_request_ctx_new_for_credentialsd:
+ * xdp_credential_request_ctx_init_for_credentialsd:
  * @credential: (transfer full): Reference to the portal context.
  * @backend_session_id: (transfer full): Session ID for this request.
  * @credsd_session: (transfer full): D-Bus proxy for the related credentialsd Session object.
  * @promise: (transfer full): Promise to return to the caller.
  * @credsd_signal_monitor: (transfer full): Signal monitor with all credentialsd Session signals subscribed.
  *
- * Create a new request context for use in a credentialsd session signal handler.
+ * Initialize request context for use in a credentialsd session signal handler.
  */
 static void
 xdp_credential_request_ctx_init_for_credentialsd (
