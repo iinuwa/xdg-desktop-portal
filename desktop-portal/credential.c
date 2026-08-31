@@ -908,7 +908,7 @@ create_credential_validate_options (GVariant *arg_options, const gchar *arg_type
   {
     backend_options_dict = g_variant_dict_new (NULL);
 
-    gchar *activation_token = "";
+    g_autofree gchar *activation_token = NULL;
     // TODO: I don't think this else statement is necessary; check bug in
     // credentialsd
     if (g_variant_lookup (arg_options, "activation_token", "s", &activation_token))
@@ -1021,7 +1021,7 @@ get_credential_validate_options (GVariant *arg_options, GVariant **frontend_opti
   {
     backend_options_dict = g_variant_dict_new (NULL);
 
-    gchar *activation_token = "";
+    g_autofree gchar *activation_token = NULL;
     // TODO: I don't think this else statement is necessary; check bug in
     // credentialsd
     if (g_variant_lookup (arg_options, "activation_token", "s", &activation_token))
