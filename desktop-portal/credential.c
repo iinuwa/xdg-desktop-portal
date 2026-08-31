@@ -39,7 +39,6 @@
 #include "xdp-app-info.h"
 #include "xdp-context.h"
 #include "xdp-experimental-dbus.h"
-#include "xdp-experimental-handler-dbus.h"
 #include "xdp-impl-experimental-dbus.h"
 #include "xdp-portal-config.h"
 #include "xdp-request-dex.h"
@@ -111,12 +110,6 @@ struct _XdpCredential
   XdpContext *context;
 
   /**
-   * A D-Bus proxy for the xyz.iinuwa.credentialsd.Credentials interface.
-   * Valid for the lifetime of this portal.
-   */
-  XdpDbusExperimentalHandlerCredential *handler;
-
-  /**
    * A D-Bus proxy for the Credential Portal backend interface.
    * Valid for the lifetime of this portal.
    */
@@ -152,7 +145,6 @@ xdp_credential_dispose (GObject *object)
 
   // credential->context is not owned by this object, so not clearing here.
 
-  g_clear_object (&credential->handler);
   g_clear_object (&credential->impl);
   g_clear_object (&credential->manager);
 
@@ -174,7 +166,7 @@ xdp_credential_class_init (XdpCredentialClass *klass)
 
 static XdpCredential *
 xdp_credential_new (XdpContext *context, XdpDbusExperimentalImplCredential *impl,
-                    CredentialsdDbusExperimentalManager *manager, XdpDbusExperimentalHandlerCredential *handler)
+                    CredentialsdDbusExperimentalManager *manager)
 {
   XdpCredential *credential;
 
@@ -182,9 +174,6 @@ xdp_credential_new (XdpContext *context, XdpDbusExperimentalImplCredential *impl
   credential->context = context;
   credential->impl = g_object_ref (impl);
   credential->manager = g_object_ref (manager);
-  credential->handler = g_object_ref (handler);
-
-  g_dbus_proxy_set_default_timeout (G_DBUS_PROXY (credential->handler), G_MAXINT);
 
   xdp_dbus_experimental_credential_set_conditional_create (XDP_DBUS_EXPERIMENTAL_CREDENTIAL (credential), FALSE);
   xdp_dbus_experimental_credential_set_conditional_get (XDP_DBUS_EXPERIMENTAL_CREDENTIAL (credential), FALSE);
@@ -301,8 +290,6 @@ xdp_credential_request_ctx_free (XdpCredentialRequestCtx *self)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (XdpCredentialRequestCtx, xdp_credential_request_ctx_free)
 
 GQuark quark_credentialsd_error;
-
-const gchar *CREDENTIALSD_HANDLER_DBUS_NAME = "xyz.iinuwa.credentialsd.Credentials";
 
 const gchar *CREDENTIALSD_DBUS_NAME = "xyz.iinuwa.credentialsd.Credentials";
 
@@ -661,7 +648,6 @@ handle_credential_request (XdpCredential *credential, XdpRequestDex *request, en
                            const gchar *arg_parent_window, const gchar *arg_origin, gchar *top_origin,
                            void *data, GVariantDict *backend_options_dict, const gchar *app_id)
 {
-  g_autoptr (XdpDbusExperimentalHandlerCredentialGetCredentialResult) result = NULL;
   g_autoptr (CredentialsdDbusExperimentalSession) credsd_session = NULL;
   g_autoptr (CredentialsdDbusExperimentalSessionSignalMonitor) credsd_signal_monitor = NULL;
   g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) impl_signal_monitor = NULL;
@@ -1053,7 +1039,6 @@ init_credential (gpointer user_data)
   XdpContext *context = XDP_CONTEXT (user_data);
   g_autoptr (XdpCredential) credential = NULL;
   g_autoptr (CredentialsdDbusExperimentalManager) manager = NULL;
-  g_autoptr (XdpDbusExperimentalHandlerCredential) handler = NULL;
   g_autoptr (XdpDbusExperimentalImplCredential) impl = NULL;
   g_autoptr (GError) error = NULL;
   g_autoptr (XdpDbusExperimentalImplCredentialSignalMonitor) impl_signal_monitor = NULL;
@@ -1098,21 +1083,8 @@ init_credential (gpointer user_data)
     }
   g_debug ("created credentialsd manager proxy.");
 
-  g_debug ("creating handler proxy...");
-
-  handler = dex_await_object (xdp_dbus_experimental_handler_credential_proxy_new_future (
-                                connection, G_DBUS_PROXY_FLAGS_NONE, CREDENTIALSD_HANDLER_DBUS_NAME, DESKTOP_DBUS_PATH),
-                              &error);
-
-  if (!handler)
-    {
-      g_warning ("Failed to create credential proxy: %s", error->message);
-      return dex_future_new_false ();
-    }
-  g_debug ("created handler proxy.");
-
   credential
-    = xdp_credential_new (context, g_steal_pointer (&impl), g_steal_pointer (&manager), g_steal_pointer (&handler));
+    = xdp_credential_new (context, g_steal_pointer (&impl), g_steal_pointer (&manager));
 
   xdp_context_take_and_export_portal (context, G_DBUS_INTERFACE_SKELETON (g_steal_pointer (&credential)),
                                       XDP_CONTEXT_EXPORT_FLAGS_RUN_IN_FIBER);

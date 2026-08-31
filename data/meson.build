@@ -80,9 +80,6 @@ portal_impl_sources = files(
 portal_impl_experimental_sources = files(
   'org.freedesktop.impl.portal.experimental.Credential.xml',
 )
-portal_handler_experimental_sources = files(
-  'org.freedesktop.handler.portal.experimental.Credential.xml',
-)
 credentialsd_experimental_sources = files(
   'xyz.iinuwa.credentialsd.Manager.xml',
   'xyz.iinuwa.credentialsd.Session.xml',
