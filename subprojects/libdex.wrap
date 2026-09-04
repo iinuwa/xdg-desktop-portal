@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-FileCopyrightText: Copyright © the xdg-desktop-portal contributors
+
+[wrap-git]
+directory = libdex-1
+url = https://gitlab.gnome.org/GNOME/libdex.git
+revision = 1.2.beta
+depth=1
+
+[provide]
+libdex-1=libdex_dep
